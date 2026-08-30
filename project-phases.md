@@ -15,10 +15,10 @@ bolted on at the end.
 - [ ] Create a dedicated, restricted SSH user on the test host
       (`sysadmin-readonly` or similar).
 - [ ] Set up SSH key-based auth (no passwords).
-- [ ] Decide on stack: Python (`asyncssh`/`paramiko` + `sqlite3`) or
+- [x] Decide on stack: Python (`asyncssh`/`paramiko` + `sqlite3`) or
       Node (`ssh2` + `better-sqlite3`). Python is recommended for MCP
       server ecosystem maturity.
-- [ ] Scaffold the MCP server project structure (Executor module,
+- [x] Scaffold the MCP server project structure (Executor module,
       MCP/tool-definition module, DB module kept separate).
 
 **Exit criteria:** Can SSH into the test box from your dev machine using
@@ -33,9 +33,9 @@ logs but cannot write/delete anything.
 involved yet — this should be testable with plain function calls / unit
 tests.
 
-- [ ] Implement SSH connection handling (connect, reuse/pool, timeout,
+- [~] Implement SSH connection handling (connect, reuse/pool, timeout,
       disconnect).
-- [ ] Implement each capability as a typed function, not a raw string
+- [~] Implement each capability as a typed function, not a raw string
       executor:
   - `check_ports(host)`
   - `check_services(host, state_filter=None)`
@@ -43,13 +43,13 @@ tests.
   - `read_log(host, logfile, mode, lines)` where `mode` ∈ {head, tail, cat}
   - `grep_log(host, logfile, pattern, max_lines)`
   - `who_is_on(host)`
-- [ ] Enforce allowlists:
+- [~] Enforce allowlists:
   - Allowlisted log file paths per host (config-driven).
   - Reject `cat` beyond a size cap; force max line counts.
   - Reject any parameter containing shell metacharacters where not
     expected.
-- [ ] Build commands as argument arrays, not interpolated shell strings.
-- [ ] Unit tests: valid inputs succeed; malicious/out-of-scope inputs
+- [x] Build commands as argument arrays, not interpolated shell strings.
+- [~] Unit tests: valid inputs succeed; malicious/out-of-scope inputs
       (path traversal, injection attempts, oversized requests) are
       rejected with clear errors.
 

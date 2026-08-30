@@ -1,0 +1,9 @@
+# Copy to config/hosts.toml and set restrictive filesystem permissions.
+# Do not commit real hostnames, credentials, private keys, or broad log globs.
+
+[hosts.example]
+hostname = "test-host.example.internal"
+username = "sysadmin-readonly"
+known_hosts = "~/.ssh/known_hosts"
+client_keys = ["~/.ssh/sysadmin_readonly"]
+allowed_logs = ["/var/log/auth.log", "/var/log/syslog"]
