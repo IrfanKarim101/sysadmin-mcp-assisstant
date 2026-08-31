@@ -13,6 +13,17 @@ allowlisted log reads/searches, and active users. `ReadOnlyExecutor` applies
 uniform output bounds, while the AsyncSSH implementation remains isolated in
 the transport module. MCP tools are not implemented yet.
 
+Phase 2's deployable OS hardening is available in [`hardening/`](hardening/).
+It uses an OpenSSH forced-command gate with fixed absolute executables, a
+root-owned log allowlist, disabled interactive/forwarding features, and an
+adversarial verification checklist. Deployment and live escape testing must be
+performed on the disposable Linux host before Phase 2 is considered complete.
+
+Phase 3's mandatory append-only SQLite audit sink is implemented. It records a
+durable attempt before transport execution, a terminal success/error event,
+and policy denials, with bounded excerpts and full-output hashes. See
+[`docs/audit.md`](docs/audit.md) for the event and operational model.
+
 Host log access is configured with exact absolute paths in
 `config/hosts.toml`; globs, relative paths, and paths containing traversal are
 not accepted. Log line requests are capped at 500 lines, and every command

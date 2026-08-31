@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from time import perf_counter
+from uuid import uuid4
 
+from .audit import AuditEvent, AuditSink
 from .config import HostConfig
 from .models import CommandResult
 from .policy import MAX_LINES, PolicyError, ReadOnlyCommandPolicy
 from .transport import AsyncSSHTransport, Transport
 
 __all__ = [
+    "MAX_LINES",
     "AsyncSSHTransport",
     "CommandResult",
-    "MAX_LINES",
     "PolicyError",
     "ReadOnlyExecutor",
     "SSHTransport",
@@ -33,7 +36,9 @@ class ReadOnlyExecutor:
         self,
         hosts: Mapping[str, HostConfig],
         transport: Transport,
+        audit: AuditSink,
         *,
+        session_id: str | None = None,
         max_output_bytes: int = MAX_OUTPUT_BYTES,
         max_output_lines: int = MAX_OUTPUT_LINES,
     ) -> None:
@@ -41,51 +46,160 @@ class ReadOnlyExecutor:
             raise ValueError("output limits must be positive")
         self._policy = ReadOnlyCommandPolicy(hosts)
         self._transport = transport
+        self._audit = audit
+        self._session_id = session_id
         self._max_output_bytes = max_output_bytes
         self._max_output_lines = max_output_lines
 
     async def check_ports(self, host: str) -> CommandResult:
-        target = self._policy.host(host)
-        result = await self._run(target, self._policy.ports())
+        parameters: dict[str, object] = {}
+        try:
+            target = self._policy.host(host)
+        except PolicyError:
+            self._audit_denied(host, "check_ports", parameters)
+            raise
+        result = await self._run(target, self._policy.ports(), "check_ports", parameters)
         if result.exit_status == 127:
-            return await self._run(target, self._policy.ports(fallback=True))
+            return await self._run(
+                target, self._policy.ports(fallback=True), "check_ports", parameters
+            )
         return result
 
     async def check_services(self, host: str, state_filter: str | None = None) -> CommandResult:
-        return await self._run(self._policy.host(host), self._policy.services(state_filter))
+        parameters = {"state_filter": state_filter}
+        try:
+            target = self._policy.host(host)
+            command = self._policy.services(state_filter)
+        except PolicyError:
+            self._audit_denied(host, "check_services", parameters)
+            raise
+        return await self._run(target, command, "check_services", parameters)
 
     async def check_resources(
         self, host: str
     ) -> tuple[CommandResult, CommandResult, CommandResult]:
-        target = self._policy.host(host)
+        parameters: dict[str, object] = {}
+        try:
+            target = self._policy.host(host)
+        except PolicyError:
+            self._audit_denied(host, "check_resources", parameters)
+            raise
         top, free, vmstat = self._policy.resources()
         return (
-            await self._run(target, top),
-            await self._run(target, free),
-            await self._run(target, vmstat),
+            await self._run(target, top, "check_resources", parameters),
+            await self._run(target, free, "check_resources", parameters),
+            await self._run(target, vmstat, "check_resources", parameters),
         )
 
     async def read_log(self, host: str, logfile: str, mode: str, lines: int = 100) -> CommandResult:
-        target = self._policy.host(host)
-        return await self._run(target, self._policy.read_log(host, logfile, mode, lines))
+        parameters = {"logfile": logfile, "mode": mode, "lines": lines}
+        try:
+            target = self._policy.host(host)
+            command = self._policy.read_log(host, logfile, mode, lines)
+        except PolicyError:
+            self._audit_denied(host, "read_log", parameters)
+            raise
+        return await self._run(target, command, "read_log", parameters)
 
     async def grep_log(
         self, host: str, logfile: str, pattern: str, max_lines: int = 100
     ) -> CommandResult:
-        target = self._policy.host(host)
-        return await self._run(target, self._policy.grep_log(host, logfile, pattern, max_lines))
+        parameters = {"logfile": logfile, "pattern": pattern, "max_lines": max_lines}
+        try:
+            target = self._policy.host(host)
+            command = self._policy.grep_log(host, logfile, pattern, max_lines)
+        except PolicyError:
+            self._audit_denied(host, "grep_log", parameters)
+            raise
+        return await self._run(target, command, "grep_log", parameters)
 
     async def who_is_on(self, host: str) -> tuple[CommandResult, CommandResult]:
-        target = self._policy.host(host)
+        parameters: dict[str, object] = {}
+        try:
+            target = self._policy.host(host)
+        except PolicyError:
+            self._audit_denied(host, "who_is_on", parameters)
+            raise
         first, second = self._policy.active_users()
-        return (await self._run(target, first), await self._run(target, second))
+        return (
+            await self._run(target, first, "who_is_on", parameters),
+            await self._run(target, second, "who_is_on", parameters),
+        )
 
-    async def _run(self, host: HostConfig, argv: Sequence[str]) -> CommandResult:
-        result = await self._transport.run(host, argv)
+    async def _run(
+        self,
+        host: HostConfig,
+        argv: Sequence[str],
+        tool_name: str,
+        parameters: Mapping[str, object],
+    ) -> CommandResult:
+        request_id = str(uuid4())
+        self._append_audit(request_id, host.name, tool_name, parameters, argv, "attempted")
+        started = perf_counter()
+        try:
+            result = await self._transport.run(host, argv)
+        except Exception as error:
+            duration_ms = round((perf_counter() - started) * 1_000)
+            self._append_audit(
+                request_id,
+                host.name,
+                tool_name,
+                parameters,
+                argv,
+                "error",
+                output=f"{type(error).__name__}: {error}",
+                duration_ms=duration_ms,
+            )
+            raise
+        duration_ms = round((perf_counter() - started) * 1_000)
+        raw_output = result.stdout + result.stderr
+        self._append_audit(
+            request_id,
+            host.name,
+            tool_name,
+            parameters,
+            argv,
+            "success" if result.exit_status == 0 else "error",
+            output=raw_output,
+            duration_ms=duration_ms,
+        )
         stdout, stdout_cut = self._bounded(result.stdout)
         stderr, stderr_cut = self._bounded(result.stderr)
         return CommandResult(
             tuple(argv), stdout, stderr, result.exit_status, stdout_cut or stderr_cut
+        )
+
+    def _audit_denied(
+        self, host: str, tool_name: str, parameters: Mapping[str, object]
+    ) -> None:
+        self._append_audit(
+            str(uuid4()), host, tool_name, parameters, (), "denied"
+        )
+
+    def _append_audit(
+        self,
+        request_id: str,
+        host: str,
+        tool_name: str,
+        parameters: Mapping[str, object],
+        command: Sequence[str],
+        status: str,
+        *,
+        output: str | None = None,
+        duration_ms: int | None = None,
+    ) -> None:
+        self._audit.append(
+            AuditEvent(
+                request_id=request_id,
+                session_id=self._session_id,
+                target_host=host,
+                tool_name=tool_name,
+                parameters=parameters,
+                command=command,
+                status=status,
+                output=output,
+                duration_ms=duration_ms,
+            )
         )
 
     def _bounded(self, value: str) -> tuple[str, bool]:

@@ -2,6 +2,7 @@ from pathlib import PurePosixPath
 
 import pytest
 
+from sysadmin_mcp.audit import AuditEvent
 from sysadmin_mcp.config import HostConfig
 from sysadmin_mcp.executor import CommandResult, PolicyError, ReadOnlyExecutor
 from sysadmin_mcp.policy import MAX_GREP_PATTERN_LENGTH, MAX_LINES, ReadOnlyCommandPolicy
@@ -17,6 +18,14 @@ class FakeTransport:
         return CommandResult(command, "safe output", "", 0)
 
 
+class MemoryAudit:
+    def __init__(self) -> None:
+        self.events: list[AuditEvent] = []
+
+    def append(self, event: AuditEvent) -> None:
+        self.events.append(event)
+
+
 @pytest.fixture
 def executor() -> tuple[ReadOnlyExecutor, FakeTransport]:
     transport = FakeTransport()
@@ -24,7 +33,7 @@ def executor() -> tuple[ReadOnlyExecutor, FakeTransport]:
         name="test", hostname="test.example", username="sysadmin-readonly", known_hosts=None,
         client_keys=(), allowed_logs=frozenset({PurePosixPath("/var/log/syslog")}),
     )
-    return ReadOnlyExecutor({"test": host}, transport), transport
+    return ReadOnlyExecutor({"test": host}, transport, MemoryAudit()), transport
 
 
 @pytest.mark.asyncio
@@ -102,10 +111,16 @@ async def test_all_results_are_bounded_by_lines_and_bytes(executor) -> None:
 
     transport.run = run
     hosts = {"test": executor[0]._policy.host("test")}
-    service = ReadOnlyExecutor(hosts, transport, max_output_lines=3, max_output_bytes=15)
+    service = ReadOnlyExecutor(
+        hosts,
+        transport,
+        MemoryAudit(),
+        max_output_lines=3,
+        max_output_bytes=15,
+    )
     result = await service.check_services("test")
-    assert result.stdout == "abcdef\nabcdef\n"
-    assert result.stderr == "abcdef\nabcdef\n"
+    assert result.stdout == "abcdef\nabcdef\na"
+    assert result.stderr == "abcdef\nabcdef\na"
     assert result.truncated is True
     assert len(result.stdout.encode()) <= 15
 

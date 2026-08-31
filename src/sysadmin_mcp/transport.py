@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import shlex
+from collections.abc import Sequence
 from typing import Protocol
 
 from .config import HostConfig

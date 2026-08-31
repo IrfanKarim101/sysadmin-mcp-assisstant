@@ -10,6 +10,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["mcp>=1.0.0", "asyncssh>=2.14.0"]
 
+[project.scripts]
+sysadmin-readonly-command = "sysadmin_mcp.forced_command:main"
+sysadmin-audit-report = "sysadmin_mcp.audit_report:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.6.0"]
 

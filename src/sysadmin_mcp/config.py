@@ -5,9 +5,9 @@ and per-host log-path allowlists must be reviewable without editing the
 executor's command policy.
 """
 
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-import tomllib
 
 
 @dataclass(frozen=True)

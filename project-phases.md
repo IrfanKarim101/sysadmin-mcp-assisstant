@@ -63,15 +63,15 @@ to break out of scope fail safely.
 
 **Goal:** Make "read-only" true even if the Executor layer has a bug.
 
-- [ ] Restrict the SSH user's shell (`rbash`) or use a forced command in
+- [~] Restrict the SSH user's shell (`rbash`) or use a forced command in
       `authorized_keys` that only permits the specific whitelisted binaries.
-- [ ] Ensure the user has no sudo, or a sudoers entry scoped to explicit
+- [~] Ensure the user has no sudo, or a sudoers entry scoped to explicit
       read-only binaries only (e.g. `/usr/bin/ss`, `/usr/bin/tail`) with
       `NOPASSWD` disabled unless required.
-- [ ] Verify via manual pentest-style checks: try to write a file, try to
+- [~] Verify via manual pentest-style checks: try to write a file, try to
       escape the restricted shell, try command chaining (`;`, `&&`, `|` to
       a write command) — all should fail.
-- [ ] Document the hardening steps so they're repeatable for any new host
+- [x] Document the hardening steps so they're repeatable for any new host
       added later.
 
 **Exit criteria:** Even with direct terminal access as the restricted
@@ -83,14 +83,14 @@ user (no app in front of it), no write/modify/delete action is possible.
 
 **Goal:** Every action is durably logged before the result is returned.
 
-- [ ] Create the `action_log` schema (see project-context.md §7).
-- [ ] Log entry written at call time (status=pending/attempted) and
+- [x] Create the `action_log` schema (see project-context.md §7).
+- [x] Log entry written at call time (status=pending/attempted) and
       updated/finalized at completion (status=success/error), or logged
       as a single atomic insert after execution — decide based on whether
       you need to detect hung/interrupted calls.
-- [ ] Use a separate DB-writing process/connection with INSERT-only
+- [~] Use a separate DB-writing process/connection with INSERT-only
       privileges where practical, to keep the log append-only.
-- [ ] Add a simple query/report script to view recent actions
+- [x] Add a simple query/report script to view recent actions
       (for your own debugging, not the end-user UI yet).
 
 **Exit criteria:** Every Executor call from Phase 1, when run, produces a

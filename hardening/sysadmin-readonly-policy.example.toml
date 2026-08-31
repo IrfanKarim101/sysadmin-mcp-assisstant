@@ -1,0 +1,5 @@
+# Install as /etc/sysadmin-readonly-policy.toml, owned by root:root, mode 0644.
+# Keep this list aligned with the application host's allowed_logs setting.
+
+[policy]
+allowed_logs = ["/var/log/auth.log", "/var/log/syslog"]
