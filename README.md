@@ -24,6 +24,11 @@ durable attempt before transport execution, a terminal success/error event,
 and policy denials, with bounded excerpts and full-output hashes. See
 [`docs/audit.md`](docs/audit.md) for the event and operational model.
 
+Phase 4's typed MCP stdio adapter exposes the six diagnostic capabilities with
+generated bounded schemas and read-only annotations. It has no raw command or
+generic SSH tool. See [`docs/mcp-server.md`](docs/mcp-server.md) for runtime and
+validation instructions.
+
 Host log access is configured with exact absolute paths in
 `config/hosts.toml`; globs, relative paths, and paths containing traversal are
 not accepted. Log line requests are capped at 500 lines, and every command
@@ -37,6 +42,12 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 pytest
+```
+
+Run the MCP server after creating the host configuration:
+
+```powershell
+sysadmin-mcp --config config/hosts.toml --audit-db data/audit.db
 ```
 
 Copy `config/hosts.example.toml` to `config/hosts.toml` only after the test

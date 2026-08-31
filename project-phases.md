@@ -103,15 +103,15 @@ command executed.
 
 **Goal:** Expose the Executor functions as MCP tools the assistant can call.
 
-- [ ] Write MCP tool schemas (name, description, structured parameters)
+- [x] Write MCP tool schemas (name, description, structured parameters)
       for each capability — descriptions should make clear these are
       read-only and what constraints apply (e.g. "only reads logs from
       the allowlisted path set").
-- [ ] Wire each MCP tool to its corresponding Executor function — no
+- [x] Wire each MCP tool to its corresponding Executor function — no
       logic beyond translation/validation should live here.
-- [ ] Confirm the LLM cannot pass through raw shell strings; only the
+- [x] Confirm the LLM cannot pass through raw shell strings; only the
       structured parameters defined in the schema are accepted.
-- [ ] Test with real conversational prompts ("check what's listening on
+- [~] Test with real conversational prompts ("check what's listening on
       this box", "search the nginx error log for 502s", "who's logged in
       right now") and confirm correct tool routing.
 
