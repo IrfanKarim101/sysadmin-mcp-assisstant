@@ -125,6 +125,20 @@ async def test_all_results_are_bounded_by_lines_and_bytes(executor) -> None:
     assert len(result.stdout.encode()) <= 15
 
 
+@pytest.mark.asyncio
+async def test_transport_truncation_flag_is_preserved(executor) -> None:
+    service, transport = executor
+
+    async def run(host, argv):
+        command = tuple(argv)
+        transport.commands.append(command)
+        return CommandResult(command, "bounded prefix", "", 255, truncated=True)
+
+    transport.run = run
+    result = await service.check_services("test")
+    assert result.truncated is True
+
+
 def test_policy_builders_need_no_ssh(executor) -> None:
     service, _ = executor
     policy: ReadOnlyCommandPolicy = service._policy

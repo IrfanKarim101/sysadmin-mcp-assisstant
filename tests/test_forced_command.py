@@ -1,5 +1,6 @@
 import shlex
 from pathlib import PurePosixPath
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +11,7 @@ from sysadmin_mcp.forced_command import (
     CommandDenied,
     authorize_command,
     load_allowed_logs,
+    validate_policy_file,
 )
 from sysadmin_mcp.policy import ReadOnlyCommandPolicy
 
@@ -123,3 +125,18 @@ def test_policy_file_requires_safe_absolute_logs(tmp_path) -> None:
     policy_file.write_text('[policy]\nallowed_logs = ["../etc/shadow"]\n', encoding="utf-8")
     with pytest.raises(CommandDenied, match="unsafe log path"):
         load_allowed_logs(str(policy_file))
+
+
+def test_os_policy_file_must_be_root_owned_regular_and_not_writable(monkeypatch) -> None:
+    secure = SimpleNamespace(st_mode=0o100644, st_uid=0)
+    monkeypatch.setattr("os.stat", lambda path, follow_symlinks: secure)
+    validate_policy_file("/etc/policy.toml")
+
+    for metadata in (
+        SimpleNamespace(st_mode=0o100664, st_uid=0),
+        SimpleNamespace(st_mode=0o100644, st_uid=1000),
+        SimpleNamespace(st_mode=0o120777, st_uid=0),
+    ):
+        monkeypatch.setattr("os.stat", lambda path, follow_symlinks, item=metadata: item)
+        with pytest.raises(CommandDenied, match="policy"):
+            validate_policy_file("/etc/policy.toml")

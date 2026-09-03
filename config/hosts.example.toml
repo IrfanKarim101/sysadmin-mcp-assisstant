@@ -7,3 +7,7 @@ username = "sysadmin-readonly"
 known_hosts = "~/.ssh/known_hosts"
 client_keys = ["~/.ssh/sysadmin_readonly"]
 allowed_logs = ["/var/log/auth.log", "/var/log/syslog"]
+
+[hosts.example.thresholds]
+cpu_percent = 90.0
+memory_percent = 90.0

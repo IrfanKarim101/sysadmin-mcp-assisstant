@@ -8,6 +8,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from sysadmin_mcp.audit import AuditEvent
 from sysadmin_mcp.config import HostConfig
 from sysadmin_mcp.executor import CommandResult, ReadOnlyExecutor
+from sysadmin_mcp.rate_limit import SlidingWindowRateLimiter
 from sysadmin_mcp.server import create_mcp_server
 
 
@@ -141,22 +142,49 @@ async def test_tools_route_only_to_fixed_executor_capabilities(
 async def test_raw_output_is_preserved_in_structured_result(mcp_adapter) -> None:
     server, _, _ = mcp_adapter
     result = await server.call_tool("check_ports", {"host": "test"})
-    assert result.structured_content == {
+    assert result.structured_content["raw"] == {
         "command": ["ss", "-tulnp"],
         "stdout": "raw: ss\n",
         "stderr": "",
         "exit_status": 0,
         "truncated": False,
     }
+    assert list(result.structured_content) == ["raw", "summary", "display_markdown"]
+    display = result.structured_content["display_markdown"]
+    assert display.index("## Raw output") < display.index("## Summary")
+    assert "raw: ss\n" in display
 
 
 @pytest.mark.asyncio
 async def test_disallowed_log_path_cannot_reach_transport(mcp_adapter) -> None:
     server, transport, audit = mcp_adapter
-    with pytest.raises(ToolError, match="Error executing tool read_log"):
+    with pytest.raises(ToolError, match="allowlisted"):
         await server.call_tool(
             "read_log",
             {"host": "test", "logfile": "/etc/shadow", "mode": "tail", "lines": 10},
         )
     assert transport.commands == []
     assert audit.events[-1].status == "denied"
+
+
+@pytest.mark.asyncio
+async def test_mcp_rate_limit_denial_is_clear_and_does_not_reach_transport(
+    mcp_adapter,
+) -> None:
+    _, transport, audit = mcp_adapter
+    host = HostConfig(
+        "test",
+        "localhost",
+        "reader",
+        None,
+        (),
+        frozenset({PurePosixPath("/var/log/syslog")}),
+    )
+    executor = ReadOnlyExecutor({"test": host}, transport, audit)
+    server = create_mcp_server(
+        executor, rate_limiter=SlidingWindowRateLimiter(1, 60)
+    )
+    await server.call_tool("check_ports", {"host": "test"})
+    with pytest.raises(ToolError, match="Rate limit exceeded"):
+        await server.call_tool("check_ports", {"host": "test"})
+    assert transport.commands == [("ss", "-tulnp")]

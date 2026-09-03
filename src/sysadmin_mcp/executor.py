@@ -166,7 +166,11 @@ class ReadOnlyExecutor:
         stdout, stdout_cut = self._bounded(result.stdout)
         stderr, stderr_cut = self._bounded(result.stderr)
         return CommandResult(
-            tuple(argv), stdout, stderr, result.exit_status, stdout_cut or stderr_cut
+            tuple(argv),
+            stdout,
+            stderr,
+            result.exit_status,
+            result.truncated or stdout_cut or stderr_cut,
         )
 
     def _audit_denied(

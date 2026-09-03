@@ -124,14 +124,14 @@ correct tool calls routed to the Executor, with results returned.
 
 **Goal:** Implement the display contract — raw first, paraphrase second.
 
-- [ ] Render raw command output verbatim (code block / fixed-width).
-- [ ] Generate a short LLM paraphrase (1–3 sentences) underneath,
+- [x] Render raw command output verbatim (code block / fixed-width).
+- [~] Generate a short LLM paraphrase (1–3 sentences) underneath,
       summarizing what the output means in plain language.
-- [ ] (Optional, recommended) Add basic anomaly flagging in the
+- [~] (Optional, recommended) Add basic anomaly flagging in the
       paraphrase step — e.g. RAM > 90%, an inactive service that should
       be active, an unexpected listening port — based on configurable
       thresholds.
-- [ ] Confirm the paraphrase never replaces or hides any raw output.
+- [x] Confirm the paraphrase never replaces or hides any raw output.
 
 **Exit criteria:** Every tool response in the UI shows both raw output
 and a paraphrase, and thresholds (if implemented) correctly flag
@@ -143,10 +143,10 @@ out-of-range values.
 
 **Goal:** Support more than one server without code changes.
 
-- [ ] Move host configs (hostname, SSH user, key path, allowlisted log
+- [x] Move host configs (hostname, SSH user, key path, allowlisted log
       paths, resource thresholds) into a config file or table.
-- [ ] Add a simple mechanism to add/remove hosts.
-- [ ] Confirm per-host allowlists are respected (a log path allowed on
+- [x] Add a simple mechanism to add/remove hosts.
+- [x] Confirm per-host allowlists are respected (a log path allowed on
       host A but not host B is correctly rejected on host B).
 
 **Exit criteria:** Can add a second test host purely via config and
@@ -159,14 +159,14 @@ immediately query it through the same MCP tools.
 **Goal:** Actively try to break your own read-only guarantee before
 trusting it in a real environment.
 
-- [ ] Attempt prompt injection via crafted log content (e.g. a log line
+- [x] Attempt prompt injection via crafted log content (e.g. a log line
       containing fake "instructions") and confirm the LLM has no tool
       available to act on it destructively.
-- [ ] Attempt path traversal, command injection, and oversized-output
+- [x] Attempt path traversal, command injection, and oversized-output
       attacks against the Executor directly (bypassing the LLM).
-- [ ] Review the audit log for completeness — can any action occur
+- [x] Review the audit log for completeness — can any action occur
       without a corresponding log entry?
-- [ ] Review SSH user permissions one more time end-to-end (Phase 2
+- [~] Review SSH user permissions one more time end-to-end (Phase 2
       checklist) after all other phases are complete, since new code
       paths may have been added.
 
@@ -179,12 +179,12 @@ and any fixes made as a result.
 
 **Goal:** Make it usable day-to-day, then move beyond the test VM.
 
-- [ ] Add rate limiting per session/user if needed.
-- [ ] Add clear error messages for denied/out-of-scope requests (so the
+- [x] Add rate limiting per session/user if needed.
+- [x] Add clear error messages for denied/out-of-scope requests (so the
       user understands *why*, not just that it failed).
-- [ ] Documentation: how to add a host, how to adjust thresholds, how to
+- [x] Documentation: how to add a host, how to adjust thresholds, how to
       query the audit log.
-- [ ] Only after Phases 0–7 are solid: point at a real (non-critical)
+- [~] Only after Phases 0–7 are solid: point at a real (non-critical)
       server, then gradually expand scope.
 
 **Exit criteria:** Tool is usable against a real server with confidence

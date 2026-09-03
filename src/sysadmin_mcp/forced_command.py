@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import stat
 import sys
 import tomllib
 from collections.abc import Mapping, Sequence
@@ -79,6 +80,17 @@ def load_allowed_logs(path: str = DEFAULT_POLICY_PATH) -> frozenset[PurePosixPat
             raise CommandDenied("policy contains an unsafe log path")
         logs.add(log)
     return frozenset(logs)
+
+
+def validate_policy_file(path: str = DEFAULT_POLICY_PATH) -> None:
+    """Require a regular, root-owned policy which no non-root user can modify."""
+    metadata = os.stat(path, follow_symlinks=False)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise CommandDenied("policy must be a regular file")
+    if metadata.st_uid != 0:
+        raise CommandDenied("policy must be owned by root")
+    if metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise CommandDenied("policy must not be group/world writable")
 
 
 def authorize_command(
@@ -161,6 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Authorize the OpenSSH request and replace this process with the binary."""
     del argv  # There is deliberately no caller-controlled CLI surface.
     try:
+        validate_policy_file()
         allowed_logs = load_allowed_logs()
         command = authorize_command(os.environ.get("SSH_ORIGINAL_COMMAND"), allowed_logs)
     except (CommandDenied, OSError, tomllib.TOMLDecodeError) as error:

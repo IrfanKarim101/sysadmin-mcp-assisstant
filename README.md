@@ -29,6 +29,22 @@ generated bounded schemas and read-only annotations. It has no raw command or
 generic SSH tool. See [`docs/mcp-server.md`](docs/mcp-server.md) for runtime and
 validation instructions.
 
+Phase 5 adds a raw-first presentation model and a replaceable summary boundary.
+The safe default summary is content-blind, so prompt-like text in logs remains
+inert. See [`docs/presentation.md`](docs/presentation.md).
+
+Phase 6 provides validated multi-host TOML configuration, per-host log
+allowlists and resource thresholds, plus an atomic `sysadmin-hosts` management
+command. See [`docs/host-configuration.md`](docs/host-configuration.md).
+
+Phase 7's local adversarial review covers injection, traversal, audit
+completeness, prompt-like log content, and output amplification. Findings and
+remaining live-host checks are recorded in [`SECURITY_REVIEW.md`](SECURITY_REVIEW.md).
+
+Phase 8's MVP cut adds per-session rate limiting, clear safe policy errors, and
+`sysadmin-preflight`. The deployment sequence and acceptance criteria are in
+[`MVP_RUNBOOK.md`](MVP_RUNBOOK.md).
+
 Host log access is configured with exact absolute paths in
 `config/hosts.toml`; globs, relative paths, and paths containing traversal are
 not accepted. Log line requests are capped at 500 lines, and every command
