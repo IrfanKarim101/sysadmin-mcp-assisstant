@@ -66,6 +66,23 @@ Run the MCP server after creating the host configuration:
 sysadmin-mcp --config config/hosts.toml --audit-db data/audit.db
 ```
 
+## Local operator UI
+
+Copy `.env.example` to `.env`, then add `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+and the SSH credential environment variable referenced by the selected host.
+The real `.env` is Git-ignored and keys are never sent to the browser.
+
+Start the local API and UI in separate terminals:
+
+```powershell
+sysadmin-web
+cd ui
+npm run dev
+```
+
+Open `http://localhost:3000`. The provider switch supports OpenAI and Gemini;
+Anthropic is intentionally visible but disabled until its adapter is implemented.
+
 Copy `config/hosts.example.toml` to `config/hosts.toml` only after the test
 host is prepared. `config/hosts.toml`, private keys, and SQLite files are
 ignored by Git.

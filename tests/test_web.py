@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -30,9 +31,12 @@ class FakeExecutor:
 
 
 class FakeResponses:
-    def __init__(self): self.calls = 0
+    def __init__(self):
+        self.calls = 0
+        self.requests = []
     async def create(self, **kwargs):
         self.calls += 1
+        self.requests.append(kwargs)
         if self.calls == 1:
             call = SimpleNamespace(type="function_call", name="check_ports", arguments=json.dumps({"host": "attacker; rm -rf /"}), call_id="call-1")
             return SimpleNamespace(output=[call], output_text="", id="response-1")
@@ -47,6 +51,8 @@ async def test_agent_forces_selected_allowlisted_host_over_model_input():
     events = [json.loads(line) async for line in service.stream(ChatRequest(message="ports", host="olaf-ubuntu"))]
     assert executor.hosts == ["olaf-ubuntu"]
     assert [event["type"] for event in events] == ["thinking", "tool_start", "tool_result", "summary", "done"]
+    assert "tools" not in client.responses.requests[1]
+    assert client.responses.requests[1]["input"][-1]["role"] == "user"
 
 
 @pytest.mark.asyncio
@@ -66,4 +72,35 @@ def test_api_does_not_expose_credentials(tmp_path: Path):
     audit = SQLiteAuditLog(tmp_path / "audit.db")
     service = AgentService({"olaf-ubuntu": host()}, FakeExecutor(), model="test", client=SimpleNamespace(responses=FakeResponses()))
     routes = {route.path for route in create_app(service, audit).routes}
-    assert routes == {"/openapi.json", "/api/hosts", "/api/audit", "/api/chat"}
+    assert routes == {
+        "/openapi.json", "/api/hosts", "/api/providers", "/api/audit", "/api/chat"
+        , "/api/chat/sessions/{session_id}"
+    }
+
+
+def test_request_rejects_disabled_or_unknown_provider():
+    with pytest.raises(ValueError):
+        ChatRequest(message="ports", host="olaf-ubuntu", provider="anthropic")
+    with pytest.raises(ValueError):
+        ChatRequest(message="ports", host="olaf-ubuntu", provider="openai;gemini")
+
+
+class SlowResponses:
+    async def create(self, **kwargs):
+        await asyncio.sleep(1)
+
+
+@pytest.mark.asyncio
+async def test_model_timeout_ends_stream_and_reenables_client():
+    service = AgentService(
+        {"olaf-ubuntu": host()},
+        FakeExecutor(),
+        model="test",
+        client=SimpleNamespace(responses=SlowResponses()),
+        model_timeout_seconds=0.001,
+    )
+    events = [
+        json.loads(line)
+        async for line in service.stream(ChatRequest(message="ports", host="olaf-ubuntu"))
+    ]
+    assert [event["type"] for event in events] == ["thinking", "error", "done"]
