@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hmac
 import json
 import os
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -13,17 +14,19 @@ from uuid import UUID, uuid4
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import SQLiteAuditLog
+from .auth import ABSOLUTE_TIMEOUT, SESSION_COOKIE, AuthStore
 from .chat_store import MAX_CONTENT_CHARS, SQLiteChatStore
 from .config import HostConfig, load_hosts
 from .executor import ReadOnlyExecutor
 from .models import CommandResult
+from .onboarding import HostOnboardingService, VMOnboardingRequest
 from .presentation import DiagnosticPresenter
 from .rate_limit import SlidingWindowRateLimiter
 from .transport import AsyncSSHTransport
@@ -51,6 +54,24 @@ class ChatRequest(BaseModel):
     session_id: UUID | None = None
 
 
+class HostKeyDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: UUID
+    trust: bool
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class PasswordChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
+
+
 TOOLS: list[dict[str, Any]] = [
     {"type": "function", "name": "check_ports", "description": "List listening TCP/UDP ports.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "check_services", "description": "List systemd services, optionally by state.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}, "state_filter": {"type": ["string", "null"], "enum": ["active", "inactive", "failed", None]}}, "required": ["host", "state_filter"], "additionalProperties": False}, "strict": True},
@@ -63,7 +84,7 @@ TOOLS: list[dict[str, Any]] = [
 
 class AgentService:
     def __init__(self, hosts: Mapping[str, HostConfig], executor: ReadOnlyExecutor, *, model: str | None = None, client: Any | None = None, model_timeout_seconds: float = 30.0, chat_store: SQLiteChatStore | None = None) -> None:
-        self.hosts = hosts
+        self.hosts = dict(hosts)
         self.executor = executor
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-5-mini")
         self.client = client
@@ -194,9 +215,61 @@ class AgentService:
         raise ValueError("The model selected an unavailable tool")
 
 
-def create_app(service: AgentService, audit: SQLiteAuditLog) -> FastAPI:
+def create_app(
+    service: AgentService,
+    audit: SQLiteAuditLog,
+    onboarding: HostOnboardingService | None = None,
+    auth: AuthStore | None = None,
+) -> FastAPI:
+    auth = auth or AuthStore(audit.path)
     app = FastAPI(title="Sentinel Ops local agent", docs_url=None, redoc_url=None)
-    app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"], allow_methods=["GET", "POST"], allow_headers=["content-type"])
+    app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"], allow_credentials=True, allow_methods=["GET", "POST"], allow_headers=["content-type", "x-csrf-token"])
+
+    @app.middleware("http")
+    async def require_auth(request: Request, call_next):
+        if not request.url.path.startswith("/api/") or request.url.path == "/api/auth/login":
+            return await call_next(request)
+        session = auth.authenticate(request.cookies.get(SESSION_COOKIE))
+        if session is None:
+            return Response('{"detail":"Authentication required"}', 401, media_type="application/json")
+        if session.must_change_password and request.url.path not in {"/api/auth/me", "/api/auth/change-password", "/api/auth/logout"}:
+            return Response('{"detail":"Password change required"}', 403, media_type="application/json")
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and not hmac.compare_digest(request.headers.get("x-csrf-token", ""), session.csrf_token):
+            return Response('{"detail":"Invalid CSRF token"}', 403, media_type="application/json")
+        request.state.auth_session = session
+        return await call_next(request)
+
+    @app.post("/api/auth/login")
+    async def login(body: LoginRequest, response: Response) -> dict[str, object]:
+        result = auth.login(body.username, body.password)
+        if result is None:
+            raise HTTPException(401, "Invalid username or password")
+        token, session = result
+        response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="strict",
+                            secure=os.getenv("AUTH_COOKIE_SECURE", "false").lower() == "true",
+                            max_age=int(ABSOLUTE_TIMEOUT.total_seconds()), path="/")
+        return {"username": session.username, "must_change_password": session.must_change_password,
+                "csrf_token": session.csrf_token}
+
+    @app.get("/api/auth/me")
+    async def me(request: Request) -> dict[str, object]:
+        session = request.state.auth_session
+        return {"username": session.username, "must_change_password": session.must_change_password,
+                "csrf_token": session.csrf_token}
+
+    @app.post("/api/auth/change-password")
+    async def change_password(body: PasswordChangeRequest, request: Request) -> dict[str, bool]:
+        try:
+            auth.change_password(request.state.auth_session.username, body.current_password, body.new_password)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        return {"changed": True}
+
+    @app.post("/api/auth/logout", status_code=204)
+    async def logout(request: Request, response: Response) -> Response:
+        auth.logout(request.cookies.get(SESSION_COOKIE))
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
 
     @app.get("/api/hosts")
     async def hosts() -> list[dict[str, Any]]:
@@ -210,6 +283,36 @@ def create_app(service: AgentService, audit: SQLiteAuditLog) -> FastAPI:
             {"id": "anthropic", "label": "Anthropic", "enabled": False, "configured": False},
         ]
 
+    @app.post("/api/hosts/discover-key")
+    async def discover_host_key(request: VMOnboardingRequest) -> dict[str, object]:
+        if onboarding is None:
+            raise HTTPException(503, "Host onboarding is unavailable")
+        try:
+            return await onboarding.discover(request)
+        except (ValueError, ConnectionError, TimeoutError, OSError) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/hosts/decide-key")
+    async def decide_host_key(decision: HostKeyDecision) -> dict[str, object]:
+        if onboarding is None:
+            raise HTTPException(503, "Host onboarding is unavailable")
+        try:
+            host = await onboarding.decide(str(decision.token), decision.trust)
+        except (ValueError, ConnectionError, TimeoutError, OSError) as error:
+            raise HTTPException(400, str(error)) from error
+        if host is None:
+            return {"trusted": False}
+        service.hosts[host.name] = host
+        service.executor.replace_hosts(service.hosts)
+        return {
+            "trusted": True,
+            "host": {
+                "name": host.name,
+                "hostname": host.hostname,
+                "allowed_logs": sorted(map(str, host.allowed_logs)),
+            },
+        }
+
     @app.get("/api/audit")
     async def recent_audit(limit: int = 20) -> list[dict[str, Any]]:
         return [row.__dict__ for row in audit.recent(min(max(limit, 1), 100))]
@@ -219,6 +322,12 @@ def create_app(service: AgentService, audit: SQLiteAuditLog) -> FastAPI:
         if service.chat_store is None:
             return []
         return service.chat_store.messages(str(session_id), min(max(limit, 1), 1_000))
+
+    @app.get("/api/chat/sessions")
+    async def chat_sessions(limit: int = 100) -> list[dict[str, object]]:
+        if service.chat_store is None:
+            return []
+        return service.chat_store.sessions(min(max(limit, 1), 200))
 
     @app.post("/api/chat")
     async def chat(request: ChatRequest) -> StreamingResponse:
@@ -253,6 +362,8 @@ def build_app(config_path: Path, audit_path: Path, model: str | None = None) -> 
     return create_app(
         AgentService(hosts, executor, model=model, chat_store=SQLiteChatStore(audit_path)),
         audit,
+        HostOnboardingService(config_path, Path("data/known_hosts")),
+        AuthStore(audit_path),
     )
 
 

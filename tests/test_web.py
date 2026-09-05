@@ -74,7 +74,9 @@ def test_api_does_not_expose_credentials(tmp_path: Path):
     routes = {route.path for route in create_app(service, audit).routes}
     assert routes == {
         "/openapi.json", "/api/hosts", "/api/providers", "/api/audit", "/api/chat"
-        , "/api/chat/sessions/{session_id}"
+        , "/api/chat/sessions/{session_id}", "/api/hosts/discover-key",
+        "/api/hosts/decide-key", "/api/chat/sessions", "/api/auth/login",
+        "/api/auth/me", "/api/auth/change-password", "/api/auth/logout"
     }
 
 

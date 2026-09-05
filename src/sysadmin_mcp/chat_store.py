@@ -102,6 +102,18 @@ class SQLiteChatStore:
             ).fetchall()
         return [asdict(ChatMessage(**dict(row))) for row in rows]
 
+    def sessions(self, limit: int = 100) -> list[dict[str, object]]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            raise ValueError("session limit must be between 1 and 200")
+        with self._connect() as connection:
+            rows = connection.execute("""SELECT s.id, s.created_at, s.updated_at, s.host,
+                s.provider, COALESCE((SELECT content FROM chat_messages m
+                  WHERE m.session_id=s.id AND m.role='user' ORDER BY m.id LIMIT 1),
+                  'Untitled conversation') AS title,
+                (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id=s.id) AS message_count
+                FROM chat_sessions s ORDER BY s.updated_at DESC LIMIT ?""", (limit,)).fetchall()
+        return [dict(row) for row in rows]
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=5)
         connection.row_factory = sqlite3.Row

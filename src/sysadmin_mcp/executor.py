@@ -51,6 +51,10 @@ class ReadOnlyExecutor:
         self._max_output_bytes = max_output_bytes
         self._max_output_lines = max_output_lines
 
+    def replace_hosts(self, hosts: Mapping[str, HostConfig]) -> None:
+        """Atomically replace the approved target set after admin onboarding."""
+        self._policy = ReadOnlyCommandPolicy(hosts)
+
     async def check_ports(self, host: str) -> CommandResult:
         parameters: dict[str, object] = {}
         try:

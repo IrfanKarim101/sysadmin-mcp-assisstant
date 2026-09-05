@@ -39,6 +39,7 @@ class HostConfig:
     known_hosts: str | None
     client_keys: tuple[Path, ...]
     allowed_logs: frozenset[PurePosixPath]
+    port: int = 22
     password_env: str | None = None
     thresholds: ResourceThresholds = ResourceThresholds()
 
@@ -74,6 +75,7 @@ def load_hosts(path: Path) -> dict[str, HostConfig]:
                     )
                 ),
                 password_env=values.get("password_env"),
+                port=values.get("port", 22),
                 allowed_logs=frozenset(
                     PurePosixPath(item)
                     for item in _string_list(values["allowed_logs"], "allowed_logs")
@@ -102,6 +104,8 @@ def validate_host(host: HostConfig) -> None:
         raise ConfigError(f"Host {host.name!r} has an invalid hostname")
     if not isinstance(host.username, str) or not USERNAME_PATTERN.fullmatch(host.username):
         raise ConfigError(f"Host {host.name!r} has an invalid username")
+    if isinstance(host.port, bool) or not isinstance(host.port, int) or not 1 <= host.port <= 65535:
+        raise ConfigError(f"Host {host.name!r} has an invalid SSH port")
     if (
         not isinstance(host.known_hosts, str)
         or not host.known_hosts.strip()
@@ -195,6 +199,7 @@ def _serialize_hosts(hosts: dict[str, HostConfig]) -> str:
                 "",
                 f"[hosts.{table_name}]",
                 f"hostname = {json.dumps(host.hostname)}",
+                f"port = {host.port}",
                 f"username = {json.dumps(host.username)}",
                 f"known_hosts = {json.dumps(str(host.known_hosts))}",
                 "client_keys = " + _toml_array(str(key) for key in host.client_keys),

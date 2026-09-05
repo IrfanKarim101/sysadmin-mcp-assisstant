@@ -8,5 +8,6 @@ __pycache__/
 *.db
 .env
 config/hosts.toml
+data/known_hosts
 *.pem
 *.key

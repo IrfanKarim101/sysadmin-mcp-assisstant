@@ -3,6 +3,7 @@
 
 [hosts.example]
 hostname = "test-host.example.internal"
+port = 22
 username = "sysadmin-readonly"
 known_hosts = "~/.ssh/known_hosts"
 client_keys = ["~/.ssh/sysadmin_readonly"]

@@ -46,6 +46,7 @@ class AsyncSSHTransport:
             raise RuntimeError(f"required credential environment variable is not set: {host.password_env}")
         async with asyncssh.connect(
             host.hostname,
+            port=host.port,
             username=host.username,
             known_hosts=host.known_hosts,
             client_keys=[str(key) for key in host.client_keys] or None,

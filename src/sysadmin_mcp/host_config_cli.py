@@ -25,6 +25,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     add = commands.add_parser("add", help="add one explicitly configured target")
     add.add_argument("name")
     add.add_argument("--hostname", required=True)
+    add.add_argument("--port", type=int, default=22)
     add.add_argument("--username", required=True)
     add.add_argument("--known-hosts", required=True)
     add.add_argument("--client-key", action="append", required=True)
@@ -56,6 +57,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 name=args.name,
                 hostname=args.hostname,
                 username=args.username,
+                port=args.port,
                 known_hosts=str(Path(args.known_hosts).expanduser()),
                 client_keys=tuple(Path(item).expanduser() for item in args.client_key),
                 allowed_logs=frozenset(PurePosixPath(item) for item in args.allowed_log),

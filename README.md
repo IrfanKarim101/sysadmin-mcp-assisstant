@@ -5,6 +5,15 @@ hosts over SSH. The complete design and delivery plan are in
 [`project_context.md`](project_context.md) and
 [`project-phases.md`](project-phases.md).
 
+## Web console authentication
+
+The local console starts with the temporary account `admin` / `admin`. Its first
+login is restricted to changing that password; use at least 12 characters.
+Passwords and session tokens are salted or hashed in `data/audit.db`. Sessions
+use an HttpOnly cookie, CSRF protection, a 30-minute idle timeout, and an
+8-hour maximum lifetime. The top navigation provides separate **Console** and
+searchable **History** views plus explicit sign-out.
+
 ## Current status
 
 Phase 1's executor policy is implemented. `ReadOnlyCommandPolicy` builds a
@@ -82,6 +91,15 @@ npm run dev
 
 Open `http://localhost:3000`. The provider switch supports OpenAI and Gemini;
 Anthropic is intentionally visible but disabled until its adapter is implemented.
+
+### Add VMs from the UI
+
+Select **Add VM**, enter an alias, hostname/IP, SSH port, username, credential
+environment-variable name, and exact allowed log paths. The first connection
+shows the SSH key algorithm and SHA-256 fingerprint. Verify it through the VM
+console or a trusted administrator, then choose **Yes, trust key** or
+**No, cancel**. Acceptance rechecks the key before atomically updating
+`data/known_hosts` and `config/hosts.toml`; passwords are never entered in the UI.
 
 Copy `config/hosts.example.toml` to `config/hosts.toml` only after the test
 host is prepared. `config/hosts.toml`, private keys, and SQLite files are
