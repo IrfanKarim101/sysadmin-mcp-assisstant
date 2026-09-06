@@ -25,10 +25,13 @@ from .auth import ABSOLUTE_TIMEOUT, SESSION_COOKIE, AuthStore
 from .chat_store import MAX_CONTENT_CHARS, SQLiteChatStore
 from .config import HostConfig, load_hosts
 from .executor import ReadOnlyExecutor
+from .fleet import FleetHealthService
 from .models import CommandResult
 from .onboarding import HostOnboardingService, VMOnboardingRequest
+from .playbooks import PlaybookRunner
 from .presentation import DiagnosticPresenter
 from .rate_limit import SlidingWindowRateLimiter
+from .security_posture import SecurityPostureService
 from .transport import AsyncSSHTransport
 
 INSTRUCTIONS = """You are Sentinel, a read-only Linux diagnostics assistant.
@@ -70,6 +73,20 @@ class PasswordChangeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     current_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=12, max_length=256)
+
+
+class PlaybookRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    playbook_id: Literal[
+        "high-cpu", "high-memory", "disk-pressure", "service-outage",
+        "network-issue", "docker-health",
+    ]
+    host: str = Field(min_length=1, max_length=64)
+
+
+class SecurityPostureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = Field(min_length=1, max_length=64)
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -231,7 +248,6 @@ def create_app(
 ) -> FastAPI:
     auth = auth or AuthStore(audit.path)
     app = FastAPI(title="Sentinel Ops local agent", docs_url=None, redoc_url=None)
-    app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"], allow_credentials=True, allow_methods=["GET", "POST"], allow_headers=["content-type", "x-csrf-token"])
 
     @app.middleware("http")
     async def require_auth(request: Request, call_next):
@@ -295,6 +311,28 @@ def create_app(
             {"id": "anthropic", "label": "Anthropic", "enabled": False, "configured": False},
         ]
 
+    @app.get("/api/fleet/health")
+    async def fleet_health() -> list[dict[str, Any]]:
+        return await FleetHealthService(service.executor).snapshot(service.hosts)
+
+    @app.get("/api/playbooks")
+    async def list_playbooks() -> list[dict[str, Any]]:
+        return PlaybookRunner(service.executor).list()
+
+    @app.post("/api/playbooks/run")
+    async def run_playbook(request: PlaybookRequest) -> dict[str, Any]:
+        await service.limiter.acquire(request.host)
+        return await PlaybookRunner(service.executor).run(request.playbook_id, request.host)
+
+    @app.post("/api/security/posture")
+    async def security_posture(request: SecurityPostureRequest) -> dict[str, Any]:
+        try:
+            host = service.hosts[request.host]
+        except KeyError as error:
+            raise HTTPException(404, "Unknown or unapproved host") from error
+        await service.limiter.acquire(request.host)
+        return await SecurityPostureService(service.executor).inspect(host)
+
     @app.post("/api/hosts/discover-key")
     async def discover_host_key(request: VMOnboardingRequest) -> dict[str, object]:
         if onboarding is None:
@@ -344,6 +382,16 @@ def create_app(
     @app.post("/api/chat")
     async def chat(request: ChatRequest) -> StreamingResponse:
         return StreamingResponse(service.stream(request), media_type="application/x-ndjson", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+    # Add CORS last so it wraps authentication responses as well as route responses.
+    # Otherwise browsers hide 401/403 responses as a generic network failure.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        allow_credentials=True,
+        allow_methods=["GET", "POST"],
+        allow_headers=["content-type", "x-csrf-token"],
+    )
     return app
 
 
@@ -387,7 +435,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--model", default=os.getenv("OPENAI_MODEL", "gpt-5-mini"))
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args(argv)
-    uvicorn.run(build_app(args.config, args.audit_db, args.model), host="127.0.0.1", port=args.port)
+    # The Vinext UI resolves localhost to IPv6 on Windows. Binding to ::1 keeps
+    # the API local-only while preserving same-site cookies for localhost.
+    uvicorn.run(build_app(args.config, args.audit_db, args.model), host="::1", port=args.port)
     return 0
 
 

@@ -4,6 +4,7 @@ from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
 from sysadmin_mcp.audit import SQLiteAuditLog
 from sysadmin_mcp.config import ConfigError, HostConfig, validate_host
@@ -76,8 +77,25 @@ def test_api_does_not_expose_credentials(tmp_path: Path):
         "/openapi.json", "/api/hosts", "/api/providers", "/api/audit", "/api/chat"
         , "/api/chat/sessions/{session_id}", "/api/hosts/discover-key",
         "/api/hosts/decide-key", "/api/chat/sessions", "/api/auth/login",
-        "/api/auth/me", "/api/auth/change-password", "/api/auth/logout"
+        "/api/auth/me", "/api/auth/change-password", "/api/auth/logout",
+        "/api/fleet/health", "/api/playbooks", "/api/playbooks/run",
+        "/api/security/posture"
     }
+
+
+def test_unauthenticated_response_keeps_cors_headers(tmp_path: Path):
+    audit = SQLiteAuditLog(tmp_path / "audit.db")
+    service = AgentService(
+        {"olaf-ubuntu": host()},
+        FakeExecutor(),
+        model="test",
+        client=SimpleNamespace(responses=FakeResponses()),
+    )
+    response = TestClient(create_app(service, audit)).get(
+        "/api/hosts", headers={"origin": "http://localhost:3000"}
+    )
+    assert response.status_code == 401
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
 
 
 def test_request_rejects_disabled_or_unknown_provider():
