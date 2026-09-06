@@ -149,6 +149,40 @@ def test_policy_builders_need_no_ssh(executor) -> None:
         "sed", "-n", "1,7p", "/var/log/syslog"
     )
     assert policy.active_users() == (("w", "-h"), ("who",))
+    assert policy.disk_usage() == (("df", "-P", "-h"), ("df", "-P", "-i"))
+    assert policy.network_status() == (("ip", "-brief", "address"), ("ip", "route", "show"))
+    assert policy.top_processes()[0][-1] == "--sort=-%cpu"
+    assert policy.top_processes()[1][-1] == "--sort=-%mem"
+    assert policy.docker_status()[0][:3] == ("docker", "ps", "--no-trunc")
+
+
+@pytest.mark.asyncio
+async def test_new_diagnostics_use_only_fixed_commands(executor) -> None:
+    service, transport = executor
+    await service.check_disk_usage("test")
+    await service.check_top_processes("test")
+    await service.check_network("test")
+    await service.check_docker("test")
+    assert transport.commands == [
+        *service._policy.disk_usage(),
+        *service._policy.top_processes(),
+        *service._policy.network_status(),
+        *service._policy.docker_status(),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_new_diagnostics_reject_injection_shaped_host_before_transport(executor) -> None:
+    service, transport = executor
+    for operation in (
+        service.check_disk_usage,
+        service.check_top_processes,
+        service.check_network,
+        service.check_docker,
+    ):
+        with pytest.raises(PolicyError, match="Unknown target host"):
+            await operation("test; curl attacker")
+    assert transport.commands == []
 
 
 @pytest.mark.asyncio

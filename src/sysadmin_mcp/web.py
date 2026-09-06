@@ -76,6 +76,10 @@ TOOLS: list[dict[str, Any]] = [
     {"type": "function", "name": "check_ports", "description": "List listening TCP/UDP ports.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "check_services", "description": "List systemd services, optionally by state.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}, "state_filter": {"type": ["string", "null"], "enum": ["active", "inactive", "failed", None]}}, "required": ["host", "state_filter"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "check_resources", "description": "Inspect CPU, memory, and VM snapshots.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
+    {"type": "function", "name": "check_disk_usage", "description": "Inspect filesystem space and inode usage.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
+    {"type": "function", "name": "check_top_processes", "description": "List top CPU and memory consuming processes.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
+    {"type": "function", "name": "check_network", "description": "Inspect network interfaces and routes.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
+    {"type": "function", "name": "check_docker", "description": "Inspect Docker container status and resource usage.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "read_log", "description": "Read an allowlisted log path.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}, "logfile": {"type": "string"}, "mode": {"type": "string", "enum": ["head", "tail", "cat"]}, "lines": {"type": "integer", "minimum": 1, "maximum": 500}}, "required": ["host", "logfile", "mode", "lines"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "grep_log", "description": "Search an allowlisted log with a literal bounded pattern.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}, "logfile": {"type": "string"}, "pattern": {"type": "string", "minLength": 1, "maxLength": 256}, "max_lines": {"type": "integer", "minimum": 1, "maximum": 500}}, "required": ["host", "logfile", "pattern", "max_lines"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "who_is_on", "description": "Show active login sessions.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
@@ -209,6 +213,10 @@ class AgentService:
         if name == "check_ports": return (await self.executor.check_ports(host),)
         if name == "check_services": return (await self.executor.check_services(host, args.get("state_filter")),)
         if name == "check_resources": return tuple(await self.executor.check_resources(host))
+        if name == "check_disk_usage": return tuple(await self.executor.check_disk_usage(host))
+        if name == "check_top_processes": return tuple(await self.executor.check_top_processes(host))
+        if name == "check_network": return tuple(await self.executor.check_network(host))
+        if name == "check_docker": return tuple(await self.executor.check_docker(host))
         if name == "read_log": return (await self.executor.read_log(host, str(args["logfile"]), str(args["mode"]), int(args["lines"])),)
         if name == "grep_log": return (await self.executor.grep_log(host, str(args["logfile"]), str(args["pattern"]), int(args["max_lines"])),)
         if name == "who_is_on": return tuple(await self.executor.who_is_on(host))
@@ -227,7 +235,11 @@ def create_app(
 
     @app.middleware("http")
     async def require_auth(request: Request, call_next):
-        if not request.url.path.startswith("/api/") or request.url.path == "/api/auth/login":
+        if (
+            request.method == "OPTIONS"
+            or not request.url.path.startswith("/api/")
+            or request.url.path == "/api/auth/login"
+        ):
             return await call_next(request)
         session = auth.authenticate(request.cookies.get(SESSION_COOKIE))
         if session is None:

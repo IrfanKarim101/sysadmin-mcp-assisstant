@@ -57,6 +57,10 @@ async def test_server_exposes_only_typed_read_only_tools(mcp_adapter) -> None:
         "read_log",
         "grep_log",
         "who_is_on",
+        "check_disk_usage",
+        "check_top_processes",
+        "check_network",
+        "check_docker",
     }
     for tool in tools:
         assert tool.annotations.read_only_hint is True

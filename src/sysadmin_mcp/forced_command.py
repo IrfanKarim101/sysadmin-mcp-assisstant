@@ -23,10 +23,14 @@ MAX_LINES = 500
 MAX_PATTERN_LENGTH = 256
 
 DEFAULT_BINARIES = {
+    "df": "/usr/bin/df",
+    "docker": "/usr/bin/docker",
     "free": "/usr/bin/free",
     "grep": "/usr/bin/grep",
     "head": "/usr/bin/head",
+    "ip": "/usr/sbin/ip",
     "netstat": "/usr/bin/netstat",
+    "ps": "/usr/bin/ps",
     "sed": "/usr/bin/sed",
     "ss": "/usr/bin/ss",
     "systemctl": "/usr/bin/systemctl",
@@ -55,6 +59,14 @@ FIXED_COMMANDS = frozenset(
         ("w", "-h"),
         ("who",),
         SERVICE_BASE,
+        ("df", "-P", "-h"),
+        ("df", "-P", "-i"),
+        ("ps", "-eo", "pid,ppid,user,stat,%cpu,%mem,comm", "--sort=-%cpu"),
+        ("ps", "-eo", "pid,ppid,user,stat,%cpu,%mem,comm", "--sort=-%mem"),
+        ("ip", "-brief", "address"),
+        ("ip", "route", "show"),
+        ("docker", "ps", "--no-trunc", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}"),
+        ("docker", "stats", "--no-stream", "--format", "{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"),
     }
 )
 

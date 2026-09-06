@@ -41,6 +41,10 @@ const actions = [
   ['Open ports', 'Check open ports and flag anything unusual', Network],
   ['Failed services', 'Show failed services', Activity],
   ['Resources', 'Check CPU and memory usage', Database],
+  ['Disk & inodes', 'Check disk space and inode usage', Server],
+  ['Top processes', 'Show the top CPU and memory consuming processes', Activity],
+  ['Network', 'Inspect network interfaces and routes', Network],
+  ['Docker', 'Check Docker container status and resource usage', Database],
   ['Active users', 'Who is logged in?', Users],
 ] as const;
 type Host = { name: string; hostname: string; allowed_logs: string[] };

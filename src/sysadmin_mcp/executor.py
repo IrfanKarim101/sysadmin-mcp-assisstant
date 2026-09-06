@@ -95,6 +95,18 @@ class ReadOnlyExecutor:
             await self._run(target, vmstat, "check_resources", parameters),
         )
 
+    async def check_disk_usage(self, host: str) -> tuple[CommandResult, ...]:
+        return await self._fixed_many(host, "check_disk_usage", self._policy.disk_usage())
+
+    async def check_top_processes(self, host: str) -> tuple[CommandResult, ...]:
+        return await self._fixed_many(host, "check_top_processes", self._policy.top_processes())
+
+    async def check_network(self, host: str) -> tuple[CommandResult, ...]:
+        return await self._fixed_many(host, "check_network", self._policy.network_status())
+
+    async def check_docker(self, host: str) -> tuple[CommandResult, ...]:
+        return await self._fixed_many(host, "check_docker", self._policy.docker_status())
+
     async def read_log(self, host: str, logfile: str, mode: str, lines: int = 100) -> CommandResult:
         parameters = {"logfile": logfile, "mode": mode, "lines": lines}
         try:
@@ -128,6 +140,19 @@ class ReadOnlyExecutor:
         return (
             await self._run(target, first, "who_is_on", parameters),
             await self._run(target, second, "who_is_on", parameters),
+        )
+
+    async def _fixed_many(
+        self, host: str, tool_name: str, commands: Sequence[Sequence[str]]
+    ) -> tuple[CommandResult, ...]:
+        parameters: dict[str, object] = {}
+        try:
+            target = self._policy.host(host)
+        except PolicyError:
+            self._audit_denied(host, tool_name, parameters)
+            raise
+        return tuple(
+            [await self._run(target, command, tool_name, parameters) for command in commands]
         )
 
     async def _run(

@@ -45,6 +45,10 @@ def authorize(argv: tuple[str, ...]) -> tuple[str, ...]:
         ("grep", "-n", "-m", "100", "--", "x'; touch /tmp/pwned", "/var/log/syslog"),
         ("w", "-h"),
         ("who",),
+        ("df", "-P", "-h"),
+        ("ip", "route", "show"),
+        ("ps", "-eo", "pid,ppid,user,stat,%cpu,%mem,comm", "--sort=-%cpu"),
+        ("docker", "stats", "--no-stream", "--format", "{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"),
     ],
 )
 def test_exact_read_only_commands_are_authorized(argv: tuple[str, ...]) -> None:
@@ -115,6 +119,10 @@ def test_os_gate_accepts_every_phase_one_command_shape() -> None:
         policy.read_log("test", "/var/log/syslog", "cat", 10),
         policy.grep_log("test", "/var/log/syslog", "error", 10),
         *policy.active_users(),
+        *policy.disk_usage(),
+        *policy.top_processes(),
+        *policy.network_status(),
+        *policy.docker_status(),
     ]
     for command in commands:
         authorize(command)

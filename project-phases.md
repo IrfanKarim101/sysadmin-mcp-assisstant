@@ -189,3 +189,99 @@ and any fixes made as a result.
 
 **Exit criteria:** Tool is usable against a real server with confidence
 in the read-only guarantee and a complete audit trail.
+
+---
+
+## Phase 9 — Fleet Diagnostics Expansion
+
+**Goal:** Add high-value visibility without adding a generic execution path.
+
+- [~] Add fixed typed tools for disk/inodes, top processes, interfaces/routes,
+      and Docker container status/resource snapshots.
+- [ ] Add certificate-expiry checks limited to config-allowlisted endpoints.
+- [ ] Add OS/kernel/uptime, reboot history, NTP, firewall, package-update,
+      timer/cron, hardware, RAID, user/group, and approved file-metadata tools.
+- [ ] Mirror every application command in the OS forced-command gate.
+- [ ] Add injection-shaped and oversized-input tests for every parameterized tool.
+
+**Exit criteria:** Each capability is a fixed argv builder, independently testable
+without SSH, bounded, audited, and accepted by the host-side forced-command policy.
+
+---
+
+## Phase 10 — Fleet Overview & Historical Health
+
+**Goal:** Make 10–30 approved VMs understandable from one operator surface.
+
+- [ ] Fleet dashboard with status, tags, search, filters, and host detail pages.
+- [ ] Bounded parallel health checks with per-host timeouts, concurrency limits,
+      circuit breakers, and stale/offline detection.
+- [ ] Store scheduled snapshots and show CPU, memory, disk, load, and service trends.
+- [ ] Compare current state with configurable thresholds and the last healthy baseline.
+- [ ] Notifications through explicitly configured channels using bounded summaries only.
+
+**Exit criteria:** A fleet-wide check cannot exhaust the API or SSH layer, and one
+unhealthy/unreachable VM cannot block results for the rest of the fleet.
+
+---
+
+## Phase 11 — Read-Only Investigation Playbooks
+
+**Goal:** Provide reviewable decision trees for common incidents.
+
+- [ ] Fixed playbooks for high CPU/memory/load, disk pressure, service outage,
+      SSH failure, connectivity issues, certificate expiry, unhealthy containers,
+      and unexpected reboots.
+- [ ] The LLM may select and explain a playbook but cannot create commands or steps.
+- [ ] Show the executed evidence timeline and distinguish facts from interpretation.
+
+**Exit criteria:** Every playbook step maps to an approved typed tool and is covered
+by deterministic routing and termination tests.
+
+---
+
+## Phase 12 — Security Posture Diagnostics
+
+**Goal:** Detect risk while remaining observational.
+
+- [ ] Failed-login/brute-force summaries, unexpected ports, privileged services,
+      interactive-shell accounts, recent accounts, SSH posture, firewall exposure,
+      security updates, certificate expiry, world-writable approved roots, and drift.
+- [ ] Restrict filesystem checks to configured roots and predefined indicators.
+- [ ] Store versioned baselines and explain every finding with raw evidence.
+
+**Exit criteria:** Scans cannot traverse arbitrary paths, alter the host, or turn
+untrusted log/file content into instructions.
+
+---
+
+## Phase 13 — Operator UX & Identity Hardening
+
+**Goal:** Make the product safe for multiple daily operators.
+
+- [ ] Host detail pages, saved templates, pinned hosts, evidence expansion, report
+      export, conversation management, and session-expiry warnings.
+- [ ] Named users with Administrator/Operator/Viewer roles, login throttling,
+      lockout, TOTP MFA, recovery codes, session management, and auth audit events.
+- [ ] Prefer OIDC for production; require HTTPS for any non-local deployment and
+      encrypt sensitive configuration at rest.
+
+**Exit criteria:** Authorization is enforced server-side for every route/tool and
+the bootstrap credential is disabled after initial setup.
+
+---
+
+## Phase 14 — Approval-Gated Remediation (Post-MVP)
+
+**Goal:** Add narrowly defined maintenance actions without arbitrary shell access.
+
+- [ ] Consider only explicit actions such as restarting an allowlisted service,
+      rotating an approved log, clearing a specific cache, renewing a configured
+      certificate, rebooting, or applying approved security updates.
+- [ ] Require effect preview, explicit confirmation, reauthentication/MFA,
+      role authorization, host/action-bound short-lived approval tokens, fixed
+      privileged implementations, full audit, and post-action verification.
+- [ ] Never accept command text from the user or LLM.
+
+**Exit criteria:** Independent security review confirms that approvals cannot be
+replayed or widened and the privileged layer exposes no generic executor.

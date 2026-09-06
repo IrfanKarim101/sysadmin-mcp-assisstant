@@ -49,6 +49,27 @@ class ReadOnlyCommandPolicy:
     def resources(self) -> tuple[Command, Command, Command]:
         return (("top", "-bn1"), ("free", "-h"), ("vmstat", "1", "2"))
 
+    def disk_usage(self) -> tuple[Command, Command]:
+        return (("df", "-P", "-h"), ("df", "-P", "-i"))
+
+    def top_processes(self) -> tuple[Command, Command]:
+        columns = "pid,ppid,user,stat,%cpu,%mem,comm"
+        return (
+            ("ps", "-eo", columns, "--sort=-%cpu"),
+            ("ps", "-eo", columns, "--sort=-%mem"),
+        )
+
+    def network_status(self) -> tuple[Command, Command]:
+        return (("ip", "-brief", "address"), ("ip", "route", "show"))
+
+    def docker_status(self) -> tuple[Command, Command]:
+        container_format = "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}"
+        stats_format = "{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"
+        return (
+            ("docker", "ps", "--no-trunc", "--format", container_format),
+            ("docker", "stats", "--no-stream", "--format", stats_format),
+        )
+
     def read_log(self, host: str, logfile: str, mode: str, lines: int = 100) -> Command:
         log_path = self._allowed_log(host, logfile)
         if mode not in LOG_MODES:

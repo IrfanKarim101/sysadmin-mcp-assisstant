@@ -91,7 +91,7 @@ def create_mcp_server(
     *,
     rate_key: str = "mcp-session",
 ) -> MCPServer:
-    """Create an MCP server exposing only the six typed diagnostic tools."""
+    """Create an MCP server exposing only typed diagnostic tools."""
     result_presenter = presenter or DiagnosticPresenter()
     limiter = rate_limiter or SlidingWindowRateLimiter()
     server = MCPServer(
@@ -142,6 +142,26 @@ def create_mcp_server(
             limiter, rate_key, lambda: executor.check_resources(host)
         )
         return await _present_many(result_presenter, "check_resources", results)
+
+    @server.tool(name="check_disk_usage", description="Inspect filesystem space and inode usage. Read-only.", annotations=READ_ONLY_ANNOTATIONS, structured_output=True)
+    async def check_disk_usage(host: str) -> PresentedMultiCommandOutput:
+        results = await _limited_call(limiter, rate_key, lambda: executor.check_disk_usage(host))
+        return await _present_many(result_presenter, "check_disk_usage", results)
+
+    @server.tool(name="check_top_processes", description="List processes ordered by CPU and memory use. Read-only.", annotations=READ_ONLY_ANNOTATIONS, structured_output=True)
+    async def check_top_processes(host: str) -> PresentedMultiCommandOutput:
+        results = await _limited_call(limiter, rate_key, lambda: executor.check_top_processes(host))
+        return await _present_many(result_presenter, "check_top_processes", results)
+
+    @server.tool(name="check_network", description="Inspect network interfaces and routes. Read-only.", annotations=READ_ONLY_ANNOTATIONS, structured_output=True)
+    async def check_network(host: str) -> PresentedMultiCommandOutput:
+        results = await _limited_call(limiter, rate_key, lambda: executor.check_network(host))
+        return await _present_many(result_presenter, "check_network", results)
+
+    @server.tool(name="check_docker", description="Inspect Docker containers and bounded resource snapshots. Read-only.", annotations=READ_ONLY_ANNOTATIONS, structured_output=True)
+    async def check_docker(host: str) -> PresentedMultiCommandOutput:
+        results = await _limited_call(limiter, rate_key, lambda: executor.check_docker(host))
+        return await _present_many(result_presenter, "check_docker", results)
 
     @server.tool(
         name="read_log",
