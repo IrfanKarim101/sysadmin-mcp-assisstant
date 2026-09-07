@@ -121,6 +121,12 @@ class AuthStore:
             now=self._utc_now(); db.execute("UPDATE app_users SET password_hash=?,must_change_password=0,updated_at=? WHERE username=?",
               (_hash_password(new),now.isoformat(),username)); self._event(db,now,username,"password_changed")
 
+    def verify_password(self, username: str, password: str) -> bool:
+        with self._connect() as db:
+            row = db.execute("SELECT password_hash FROM app_users WHERE username=?", (username,)).fetchone()
+        candidate = row[0] if row else _hash_password("not-the-password")
+        return row is not None and _verify_password(password, candidate)
+
     def logout(self, token: str | None) -> None:
         if not token: return
         with self._connect() as db:

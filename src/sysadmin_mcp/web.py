@@ -31,6 +31,7 @@ from .onboarding import HostOnboardingService, VMOnboardingRequest
 from .playbooks import PlaybookRunner
 from .presentation import DiagnosticPresenter
 from .rate_limit import SlidingWindowRateLimiter
+from .remediation import RemediationDenied, RemediationService
 from .security_posture import SecurityPostureService
 from .transport import AsyncSSHTransport
 
@@ -97,6 +98,18 @@ class PlaybookRequest(BaseModel):
 class SecurityPostureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     host: str = Field(min_length=1, max_length=64)
+
+
+class RestartPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = Field(min_length=1, max_length=64)
+    service: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}(?:\.service)?$")
+    password: str = Field(min_length=1, max_length=256)
+
+
+class RestartExecuteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approval_token: str = Field(min_length=32, max_length=256)
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -255,6 +268,7 @@ def create_app(
     audit: SQLiteAuditLog,
     onboarding: HostOnboardingService | None = None,
     auth: AuthStore | None = None,
+    remediation: RemediationService | None = None,
 ) -> FastAPI:
     auth = auth or AuthStore(audit.path)
     app = FastAPI(title="Sentinel Ops local agent", docs_url=None, redoc_url=None)
@@ -335,7 +349,10 @@ def create_app(
 
     @app.get("/api/hosts")
     async def hosts() -> list[dict[str, Any]]:
-        return [{"name": item.name, "hostname": item.hostname, "allowed_logs": sorted(map(str, item.allowed_logs))} for item in service.hosts.values()]
+        return [{"name": item.name, "hostname": item.hostname,
+                 "allowed_logs": sorted(map(str, item.allowed_logs)),
+                 "restart_services": sorted(item.restart_services)}
+                for item in service.hosts.values()]
 
     @app.get("/api/providers")
     async def providers() -> list[dict[str, Any]]:
@@ -367,6 +384,42 @@ def create_app(
         await service.limiter.acquire(request.host)
         return await SecurityPostureService(service.executor).inspect(host)
 
+    @app.get("/api/remediation/actions")
+    async def remediation_actions(request: Request) -> list[dict[str, object]]:
+        if request.state.auth_session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        return [] if remediation is None else remediation.actions()
+
+    @app.post("/api/remediation/restart/preview")
+    async def restart_preview(body: RestartPreviewRequest, request: Request) -> dict[str, object]:
+        session = request.state.auth_session
+        if session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        if remediation is None:
+            raise HTTPException(503, "Remediation is unavailable")
+        if not auth.verify_password(session.username, body.password):
+            raise HTTPException(401, "Password reauthentication failed")
+        try:
+            return await remediation.preview_restart(
+                session.username, session.session_id, body.host, body.service
+            )
+        except RemediationDenied as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/remediation/restart/execute")
+    async def restart_execute(body: RestartExecuteRequest, request: Request) -> dict[str, object]:
+        session = request.state.auth_session
+        if session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        if remediation is None:
+            raise HTTPException(503, "Remediation is unavailable")
+        try:
+            return await remediation.execute_restart(
+                body.approval_token, session.username, session.session_id
+            )
+        except RemediationDenied as error:
+            raise HTTPException(400, str(error)) from error
+
     @app.post("/api/hosts/discover-key")
     async def discover_host_key(body: VMOnboardingRequest, request: Request) -> dict[str, object]:
         if request.state.auth_session.role != "administrator":
@@ -392,12 +445,15 @@ def create_app(
             return {"trusted": False}
         service.hosts[host.name] = host
         service.executor.replace_hosts(service.hosts)
+        if remediation is not None:
+            remediation.replace_hosts(service.hosts)
         return {
             "trusted": True,
             "host": {
                 "name": host.name,
                 "hostname": host.hostname,
                 "allowed_logs": sorted(map(str, host.allowed_logs)),
+                "restart_services": sorted(host.restart_services),
             },
         }
 
@@ -413,6 +469,8 @@ def create_app(
             raise HTTPException(400, str(error)) from error
         service.hosts.pop(host.name, None)
         service.executor.replace_hosts(service.hosts)
+        if remediation is not None:
+            remediation.replace_hosts(service.hosts)
         return {"removed": True, "name": host.name}
 
     @app.get("/api/audit")
@@ -470,12 +528,14 @@ def build_app(config_path: Path, audit_path: Path, model: str | None = None) -> 
     load_dotenv()
     hosts = load_hosts(config_path)
     audit = SQLiteAuditLog(audit_path)
-    executor = ReadOnlyExecutor(hosts, AsyncSSHTransport(), audit, session_id=str(uuid4()))
+    transport = AsyncSSHTransport()
+    executor = ReadOnlyExecutor(hosts, transport, audit, session_id=str(uuid4()))
     return create_app(
         AgentService(hosts, executor, model=model, chat_store=SQLiteChatStore(audit_path)),
         audit,
         HostOnboardingService(config_path, Path("data/known_hosts")),
         AuthStore(audit_path),
+        RemediationService(hosts, transport, audit),
     )
 
 

@@ -3,3 +3,4 @@
 
 [policy]
 allowed_logs = ["/var/log/auth.log", "/var/log/syslog"]
+restart_services = []

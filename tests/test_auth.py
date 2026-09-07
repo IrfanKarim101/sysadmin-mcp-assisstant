@@ -98,3 +98,10 @@ def test_auth_event_requests_are_bounded(tmp_path: Path):
         store.events("admin", 10)
     assert store.login("admin", "admin") is not None
     assert len(store.events("admin", 100_000)) <= 100
+
+
+def test_password_reauthentication_uses_existing_hash(tmp_path: Path):
+    store = AuthStore(tmp_path / "auth.db")
+    assert store.verify_password("admin", "admin") is True
+    assert store.verify_password("admin", "admin; reboot") is False
+    assert store.verify_password("missing", "admin") is False

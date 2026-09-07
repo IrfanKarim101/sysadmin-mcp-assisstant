@@ -49,7 +49,12 @@ sudo getent group sudo wheel adm | grep sysadmin-readonly
 
 If the user appears in an administrative group, remove it. Do not grant sudo
 for `less`, editors, pagers, shells, or commands which support arbitrary
-subcommands. This design does not require sudo at all.
+subcommands. Read-only diagnostics do not require sudo.
+
+Phase 14 remediation is disabled by default (`restart_services = []`). Enabling
+it also requires a separately reviewed, least-privilege host authorization for
+only the named services. Never grant generic `systemctl`, shell, or unrestricted
+sudo access to the diagnostic account.
 
 ## 2. Lock down the SSH key and daemon
 

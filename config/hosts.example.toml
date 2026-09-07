@@ -8,6 +8,8 @@ username = "sysadmin-readonly"
 known_hosts = "~/.ssh/known_hosts"
 client_keys = ["~/.ssh/sysadmin_readonly"]
 allowed_logs = ["/var/log/auth.log", "/var/log/syslog"]
+# Empty by default. Phase 14 actions must be explicitly named per host.
+restart_services = []
 
 [hosts.example.thresholds]
 cpu_percent = 90.0

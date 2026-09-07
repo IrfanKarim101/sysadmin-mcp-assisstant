@@ -285,3 +285,16 @@ the bootstrap credential is disabled after initial setup.
 
 **Exit criteria:** Independent security review confirms that approvals cannot be
 replayed or widened and the privileged layer exposes no generic executor.
+
+### Implemented first slice
+
+- [x] Restart only an exact, per-host allowlisted service; no generic action or
+      command-string API is exposed to the UI or LLM.
+- [x] Require Administrator role, password reauthentication, effect preview,
+      explicit confirmation, and a two-minute one-use approval tied to the
+      authenticated session, host, service, and action.
+- [x] Append attempted and terminal action events to the immutable audit log,
+      then run a fixed post-action service-state verification.
+- [x] Mirror the exact preview/restart argument shapes in the host-side gate;
+      deployments still need an independently reviewed least-privilege OS
+      authorization for the configured service before live use.

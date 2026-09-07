@@ -84,6 +84,8 @@ def test_api_does_not_expose_credentials(tmp_path: Path):
         "/api/auth/sessions", "/api/auth/sessions/revoke", "/api/auth/events",
         "/api/fleet/health", "/api/playbooks", "/api/playbooks/run",
         "/api/security/posture"
+        , "/api/remediation/actions", "/api/remediation/restart/preview",
+        "/api/remediation/restart/execute"
     }
 
 

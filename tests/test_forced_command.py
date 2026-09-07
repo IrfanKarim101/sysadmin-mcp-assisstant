@@ -93,6 +93,18 @@ def test_oversized_original_command_is_denied() -> None:
         authorize_command("x" * (MAX_COMMAND_LENGTH + 1), ALLOWED)
 
 
+def test_only_explicitly_allowlisted_service_can_be_restarted_or_previewed() -> None:
+    services = frozenset({"nginx.service"})
+    for command in (
+        "systemctl restart nginx.service",
+        "systemctl show nginx.service --no-pager --property=ActiveState,SubState,Result,ExecMainStatus",
+    ):
+        assert authorize_command(command, ALLOWED, restart_services=services)[0] == "/usr/bin/systemctl"
+    for command in ("systemctl restart ssh.service", "systemctl restart 'nginx.service;reboot'"):
+        with pytest.raises(CommandDenied):
+            authorize_command(command, ALLOWED, restart_services=services)
+
+
 def test_binary_mapping_must_use_an_absolute_path() -> None:
     with pytest.raises(CommandDenied, match="configured safely"):
         authorize_command("who", ALLOWED, {"who": "bin/who"})

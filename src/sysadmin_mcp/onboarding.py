@@ -29,6 +29,7 @@ class VMOnboardingRequest(BaseModel):
     allowed_logs: list[str] = Field(min_length=1, max_length=20)
     cpu_threshold: float = Field(default=90.0, gt=0, le=100)
     memory_threshold: float = Field(default=90.0, gt=0, le=100)
+    restart_services: list[str] = Field(default_factory=list, max_length=10)
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,7 @@ class HostOnboardingService:
                 cpu_percent=request.cpu_threshold,
                 memory_percent=request.memory_threshold,
             ),
+            restart_services=frozenset(request.restart_services),
         )
 
     def _append_known_host(self, host: HostConfig, public_key: bytes) -> None:

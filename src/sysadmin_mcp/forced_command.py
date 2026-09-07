@@ -9,6 +9,7 @@ an approved absolute executable via ``execve``.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import stat
 import sys
@@ -21,6 +22,7 @@ MAX_COMMAND_LENGTH = 4_096
 MAX_ARGUMENTS = 16
 MAX_LINES = 500
 MAX_PATTERN_LENGTH = 256
+SERVICE_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}(?:\.service)?\Z")
 
 DEFAULT_BINARIES = {
     "df": "/usr/bin/df",
@@ -94,6 +96,17 @@ def load_allowed_logs(path: str = DEFAULT_POLICY_PATH) -> frozenset[PurePosixPat
     return frozenset(logs)
 
 
+def load_restart_services(path: str = DEFAULT_POLICY_PATH) -> frozenset[str]:
+    with open(path, "rb") as policy_file:
+        values = tomllib.load(policy_file)
+    raw = values.get("policy", {}).get("restart_services", [])
+    if not isinstance(raw, list) or not all(
+        isinstance(value, str) and SERVICE_NAME_PATTERN.fullmatch(value) for value in raw
+    ):
+        raise CommandDenied("policy contains an unsafe restart service")
+    return frozenset(raw)
+
+
 def validate_policy_file(path: str = DEFAULT_POLICY_PATH) -> None:
     """Require a regular, root-owned policy which no non-root user can modify."""
     metadata = os.stat(path, follow_symlinks=False)
@@ -109,6 +122,7 @@ def authorize_command(
     original_command: str | None,
     allowed_logs: frozenset[PurePosixPath],
     binaries: Mapping[str, str] = DEFAULT_BINARIES,
+    restart_services: frozenset[str] = frozenset(),
 ) -> tuple[str, ...]:
     """Return an absolute argv only when the request matches an approved form."""
     if not original_command:
@@ -122,14 +136,15 @@ def authorize_command(
     if not argv or len(argv) > MAX_ARGUMENTS:
         raise CommandDenied("invalid argument count")
 
-    _validate_argv(argv, allowed_logs)
+    _validate_argv(argv, allowed_logs, restart_services)
     binary = binaries.get(argv[0])
     if binary is None or not PurePosixPath(binary).is_absolute():
         raise CommandDenied("approved binary is not configured safely")
     return (binary, *argv[1:])
 
 
-def _validate_argv(argv: tuple[str, ...], allowed_logs: frozenset[PurePosixPath]) -> None:
+def _validate_argv(argv: tuple[str, ...], allowed_logs: frozenset[PurePosixPath],
+                   restart_services: frozenset[str]) -> None:
     if argv in FIXED_COMMANDS:
         return
     if len(argv) == len(SERVICE_BASE) + 1 and argv[: len(SERVICE_BASE)] == SERVICE_BASE:
@@ -137,6 +152,14 @@ def _validate_argv(argv: tuple[str, ...], allowed_logs: frozenset[PurePosixPath]
         if state_option.startswith("--state=") and state_option[8:] in SERVICE_STATES:
             return
         raise CommandDenied("service state is not approved")
+    if len(argv) == 3 and argv[:2] == ("systemctl", "restart"):
+        if argv[2] in restart_services:
+            return
+        raise CommandDenied("service restart is not approved")
+    if (len(argv) == 5 and argv[:2] == ("systemctl", "show")
+            and argv[2] in restart_services and argv[3] == "--no-pager"
+            and argv[4] == "--property=ActiveState,SubState,Result,ExecMainStatus"):
+        return
     if argv[0] in {"head", "tail"}:
         if len(argv) == 4 and argv[1] == "-n":
             _validate_lines(argv[2])
@@ -187,7 +210,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         validate_policy_file()
         allowed_logs = load_allowed_logs()
-        command = authorize_command(os.environ.get("SSH_ORIGINAL_COMMAND"), allowed_logs)
+        restart_services = load_restart_services()
+        command = authorize_command(
+            os.environ.get("SSH_ORIGINAL_COMMAND"), allowed_logs,
+            restart_services=restart_services,
+        )
     except (CommandDenied, OSError, tomllib.TOMLDecodeError) as error:
         print(f"read-only policy denied request: {error}", file=sys.stderr)
         return 126
