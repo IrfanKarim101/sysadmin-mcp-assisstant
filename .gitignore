@@ -13,3 +13,4 @@ config/hosts.toml
 data/known_hosts
 *.pem
 *.key
+.env.example
