@@ -10,7 +10,6 @@ import {
   LoaderCircle,
   LockKeyhole,
   Network,
-  Plus,
   Send,
   Server,
   ShieldCheck,
@@ -19,16 +18,7 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import {
   NativeSelect,
   NativeSelectOption,
@@ -72,21 +62,6 @@ type Provider = {
   enabled: boolean;
   configured: boolean;
 };
-type PendingKey = {
-  token: string;
-  host: string;
-  port: number;
-  algorithm: string;
-  fingerprint: string;
-};
-type VMForm = {
-  name: string;
-  hostname: string;
-  port: string;
-  username: string;
-  password_env: string;
-  allowed_logs: string;
-};
 export default function Home() {
   const [hosts, setHosts] = useState<Host[]>([]),
     [host, setHost] = useState(''),
@@ -97,18 +72,6 @@ export default function Home() {
   const [provider, setProvider] = useState<ProviderId>('openai'),
     [providers, setProviders] = useState<Provider[]>([]);
   const [sessionId, setSessionId] = useState('');
-  const [addOpen, setAddOpen] = useState(false),
-    [adding, setAdding] = useState(false),
-    [addError, setAddError] = useState(''),
-    [pendingKey, setPendingKey] = useState<PendingKey | null>(null);
-  const [vm, setVm] = useState({
-    name: '',
-    hostname: '',
-    port: '22',
-    username: '',
-    password_env: '',
-    allowed_logs: '/var/log/syslog\n/var/log/auth.log',
-  });
   useEffect(() => {
     const storedSession =
       window.localStorage.getItem('sentinel-session-id') ?? crypto.randomUUID();
@@ -213,73 +176,10 @@ export default function Home() {
       setRunning(false);
     }
   }
-  async function discoverKey(e: FormEvent) {
-    e.preventDefault();
-    setAdding(true);
-    setAddError('');
-    try {
-      const response = await apiFetch('/api/hosts/discover-key', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          ...vm,
-          port: Number(vm.port),
-          allowed_logs: vm.allowed_logs
-            .split('\n')
-            .map((value) => value.trim())
-            .filter(Boolean),
-          cpu_threshold: 90,
-          memory_threshold: 90,
-        }),
-      });
-      const result = await response.json() as PendingKey & {detail?:string};
-      if (!response.ok) throw new Error(result.detail ?? 'Could not read SSH host key');
-      setPendingKey(result);
-    } catch (error) {
-      setAddError(error instanceof Error ? error.message : 'Connection failed');
-    } finally {
-      setAdding(false);
-    }
-  }
-  async function decideKey(trust: boolean) {
-    if (!pendingKey) return;
-    setAdding(true);
-    setAddError('');
-    try {
-      const response = await apiFetch('/api/hosts/decide-key', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ token: pendingKey.token, trust }),
-      });
-      const result = await response.json() as {detail?:string;trusted:boolean;host:Host};
-      if (!response.ok) throw new Error(result.detail ?? 'Host-key decision failed');
-      if (result.trusted) {
-        setHosts((current) => [...current, result.host]);
-        setHost(result.host.name);
-      }
-      setPendingKey(null);
-      setAddOpen(false);
-    } catch (error) {
-      setAddError(error instanceof Error ? error.message : 'Connection failed');
-    } finally {
-      setAdding(false);
-    }
-  }
   const selected = hosts.find((x) => x.name === host),
     latest = turns.filter((x) => x.role === 'agent').at(-1)?.events ?? [];
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <AddVMDialog
-        open={addOpen}
-        setOpen={setAddOpen}
-        vm={vm}
-        setVm={setVm}
-        pendingKey={pendingKey}
-        adding={adding}
-        error={addError}
-        discover={discoverKey}
-        decide={decideKey}
-      />
       <header className="flex h-16 items-center justify-between border-b border-border bg-card/70 px-6">
         <div className="flex items-center gap-3">
           <div className="grid size-9 place-items-center rounded-xl bg-emerald-400/10 text-emerald-300">
@@ -321,14 +221,6 @@ export default function Home() {
           <p className="px-2 pb-3 text-[10px] uppercase tracking-[.18em] text-muted-foreground">
             Diagnostics
           </p>
-          <Button
-            type="button"
-            variant="outline"
-            className="mb-3 justify-start"
-            onClick={() => setAddOpen(true)}
-          >
-            <Plus /> Add VM
-          </Button>
           {actions.map(([label, prompt, Icon]) => (
             <button
               key={label}
@@ -487,87 +379,6 @@ export default function Home() {
       </div>
     </main>
   );
-}
-
-function AddVMDialog({
-  open,
-  setOpen,
-  vm,
-  setVm,
-  pendingKey,
-  adding,
-  error,
-  discover,
-  decide,
-}: {
-  open: boolean;
-  setOpen: (open: boolean) => void;
-  vm: VMForm;
-  setVm: React.Dispatch<React.SetStateAction<VMForm>>;
-  pendingKey: PendingKey | null;
-  adding: boolean;
-  error: string;
-  discover: (event: FormEvent) => Promise<void>;
-  decide: (trust: boolean) => Promise<void>;
-}) {
-  const update = (field: string, value: string) =>
-    setVm((current) => ({ ...current, [field]: value }));
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{pendingKey ? 'Verify SSH host key' : 'Add a Linux VM'}</DialogTitle>
-          <DialogDescription>
-            {pendingKey
-              ? 'Compare this fingerprint with the VM console or a trusted administrator before accepting it.'
-              : 'Credentials remain server-side. Enter the name of an environment variable, never the password itself.'}
-          </DialogDescription>
-        </DialogHeader>
-        {pendingKey ? (
-          <div className="space-y-3 rounded-xl border border-amber-400/25 bg-amber-400/5 p-4">
-            <div className="grid grid-cols-[90px_1fr] gap-2 text-xs">
-              <span className="text-muted-foreground">Server</span>
-              <span>{pendingKey.host}:{pendingKey.port}</span>
-              <span className="text-muted-foreground">Algorithm</span>
-              <span>{pendingKey.algorithm}</span>
-              <span className="text-muted-foreground">Fingerprint</span>
-              <code className="break-all font-mono text-amber-200">{pendingKey.fingerprint}</code>
-            </div>
-            <p className="text-xs text-amber-100/80">
-              Trusting an unverified fingerprint can connect the agent to an impersonated server.
-            </p>
-          </div>
-        ) : (
-          <form id="add-vm-form" onSubmit={discover} className="grid gap-3 sm:grid-cols-2">
-            <Field label="VM name"><Input required value={vm.name} onChange={(e) => update('name', e.target.value)} placeholder="web-prod-02" /></Field>
-            <Field label="IP or hostname"><Input required value={vm.hostname} onChange={(e) => update('hostname', e.target.value)} placeholder="192.168.0.110" /></Field>
-            <Field label="SSH user"><Input required value={vm.username} onChange={(e) => update('username', e.target.value)} placeholder="sentinel" /></Field>
-            <Field label="SSH port"><Input required type="number" min="1" max="65535" value={vm.port} onChange={(e) => update('port', e.target.value)} /></Field>
-            <div className="sm:col-span-2"><Field label="Password environment variable"><Input required value={vm.password_env} onChange={(e) => update('password_env', e.target.value.toUpperCase())} placeholder="SSH_PASSWORD_WEB_PROD_02" /></Field></div>
-            <div className="sm:col-span-2"><Field label="Allowed log paths (one per line)"><Textarea required value={vm.allowed_logs} onChange={(e) => update('allowed_logs', e.target.value)} className="min-h-24 font-mono text-xs" /></Field></div>
-          </form>
-        )}
-        {error && <p className="rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>}
-        <DialogFooter>
-          {pendingKey ? (
-            <>
-              <Button type="button" variant="outline" disabled={adding} onClick={() => decide(false)}>No, cancel</Button>
-              <Button type="button" disabled={adding} className="bg-emerald-400 text-emerald-950" onClick={() => decide(true)}>{adding && <LoaderCircle className="animate-spin" />}Yes, trust key</Button>
-            </>
-          ) : (
-            <>
-              <Button type="button" variant="outline" disabled={adding} onClick={() => setOpen(false)}>Cancel</Button>
-              <Button type="submit" form="add-vm-form" disabled={adding}>{adding && <LoaderCircle className="animate-spin" />}Connect and fetch key</Button>
-            </>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return <Label className="grid gap-1.5 text-xs">{label}{children}</Label>;
 }
 
 function Bubble({ children }: { children: React.ReactNode }) {

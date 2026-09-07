@@ -87,3 +87,33 @@ async def test_malicious_log_path_is_rejected_before_network(tmp_path: Path):
     ):
         await service.discover(malicious)
     network.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_remove_deletes_only_selected_host_and_exact_known_host_entry(tmp_path: Path):
+    config, known_hosts = tmp_path / "hosts.toml", tmp_path / "known_hosts"
+    service = HostOnboardingService(config, known_hosts)
+    second = request().model_copy(update={"name": "db-02", "hostname": "192.168.0.111"})
+    with patch(
+        "sysadmin_mcp.onboarding.asyncssh.get_server_host_key",
+        AsyncMock(side_effect=[FakeKey(), FakeKey(), FakeKey(), FakeKey()]),
+    ):
+        one = await service.discover(request()); await service.decide(one["token"], True)
+        two = await service.discover(second); await service.decide(two["token"], True)
+    removed = await service.remove("web-02")
+    assert removed.name == "web-02"
+    assert set(load_hosts(config)) == {"db-02"}
+    text = known_hosts.read_text()
+    assert "192.168.0.110 " not in text and "192.168.0.111 " in text
+
+
+@pytest.mark.asyncio
+async def test_remove_rejects_unknown_host_without_changing_config(tmp_path: Path):
+    config = tmp_path / "hosts.toml"
+    service = HostOnboardingService(config, tmp_path / "known_hosts")
+    with patch("sysadmin_mcp.onboarding.asyncssh.get_server_host_key", AsyncMock(side_effect=[FakeKey(), FakeKey()])):
+        found = await service.discover(request()); await service.decide(found["token"], True)
+    before = config.read_bytes()
+    with pytest.raises(ValueError, match="does not exist"):
+        await service.remove("missing")
+    assert config.read_bytes() == before

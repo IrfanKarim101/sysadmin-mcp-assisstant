@@ -21,7 +21,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import SQLiteAuditLog
-from .auth import ABSOLUTE_TIMEOUT, SESSION_COOKIE, AuthStore
+from .auth import ABSOLUTE_TIMEOUT, SESSION_COOKIE, AuthStore, LoginThrottled
 from .chat_store import MAX_CONTENT_CHARS, SQLiteChatStore
 from .config import HostConfig, load_hosts
 from .executor import ReadOnlyExecutor
@@ -63,6 +63,11 @@ class HostKeyDecision(BaseModel):
     trust: bool
 
 
+class HostRemoveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
 class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     username: str = Field(min_length=1, max_length=64)
@@ -73,6 +78,11 @@ class PasswordChangeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     current_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=12, max_length=256)
+
+
+class SessionRevokeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    session_id: UUID
 
 
 class PlaybookRequest(BaseModel):
@@ -268,22 +278,32 @@ def create_app(
         return await call_next(request)
 
     @app.post("/api/auth/login")
-    async def login(body: LoginRequest, response: Response) -> dict[str, object]:
-        result = auth.login(body.username, body.password)
+    async def login(body: LoginRequest, request: Request, response: Response) -> dict[str, object]:
+        try:
+            result = auth.login(
+                body.username,
+                body.password,
+                client_ip=request.client.host if request.client else "local",
+                user_agent=request.headers.get("user-agent", "Browser"),
+            )
+        except LoginThrottled as error:
+            raise HTTPException(
+                429, str(error), headers={"Retry-After": str(error.retry_after_seconds)}
+            ) from error
         if result is None:
             raise HTTPException(401, "Invalid username or password")
         token, session = result
         response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="strict",
                             secure=os.getenv("AUTH_COOKIE_SECURE", "false").lower() == "true",
                             max_age=int(ABSOLUTE_TIMEOUT.total_seconds()), path="/")
-        return {"username": session.username, "must_change_password": session.must_change_password,
-                "csrf_token": session.csrf_token}
+        return {"username": session.username, "role": session.role,
+                "must_change_password": session.must_change_password, "csrf_token": session.csrf_token}
 
     @app.get("/api/auth/me")
     async def me(request: Request) -> dict[str, object]:
         session = request.state.auth_session
-        return {"username": session.username, "must_change_password": session.must_change_password,
-                "csrf_token": session.csrf_token}
+        return {"username": session.username, "role": session.role,
+                "must_change_password": session.must_change_password, "csrf_token": session.csrf_token}
 
     @app.post("/api/auth/change-password")
     async def change_password(body: PasswordChangeRequest, request: Request) -> dict[str, bool]:
@@ -298,6 +318,20 @@ def create_app(
         auth.logout(request.cookies.get(SESSION_COOKIE))
         response.delete_cookie(SESSION_COOKIE, path="/")
         return response
+
+    @app.get("/api/auth/sessions")
+    async def auth_sessions(request: Request) -> list[dict[str, object]]:
+        session = request.state.auth_session
+        return auth.sessions(session.username, session.session_id)
+
+    @app.post("/api/auth/sessions/revoke")
+    async def revoke_session(body: SessionRevokeRequest, request: Request) -> dict[str, bool]:
+        session = request.state.auth_session
+        return {"revoked": auth.revoke_session(session.username, str(body.session_id))}
+
+    @app.get("/api/auth/events")
+    async def auth_events(request: Request, limit: int = 50) -> list[dict[str, object]]:
+        return auth.events(request.state.auth_session.username, limit)
 
     @app.get("/api/hosts")
     async def hosts() -> list[dict[str, Any]]:
@@ -334,16 +368,20 @@ def create_app(
         return await SecurityPostureService(service.executor).inspect(host)
 
     @app.post("/api/hosts/discover-key")
-    async def discover_host_key(request: VMOnboardingRequest) -> dict[str, object]:
+    async def discover_host_key(body: VMOnboardingRequest, request: Request) -> dict[str, object]:
+        if request.state.auth_session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
         if onboarding is None:
             raise HTTPException(503, "Host onboarding is unavailable")
         try:
-            return await onboarding.discover(request)
+            return await onboarding.discover(body)
         except (ValueError, ConnectionError, TimeoutError, OSError) as error:
             raise HTTPException(400, str(error)) from error
 
     @app.post("/api/hosts/decide-key")
-    async def decide_host_key(decision: HostKeyDecision) -> dict[str, object]:
+    async def decide_host_key(decision: HostKeyDecision, request: Request) -> dict[str, object]:
+        if request.state.auth_session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
         if onboarding is None:
             raise HTTPException(503, "Host onboarding is unavailable")
         try:
@@ -362,6 +400,20 @@ def create_app(
                 "allowed_logs": sorted(map(str, host.allowed_logs)),
             },
         }
+
+    @app.post("/api/hosts/remove")
+    async def remove_host(body: HostRemoveRequest, request: Request) -> dict[str, object]:
+        if request.state.auth_session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        if onboarding is None:
+            raise HTTPException(503, "Host onboarding is unavailable")
+        try:
+            host = await onboarding.remove(body.name)
+        except (ValueError, OSError) as error:
+            raise HTTPException(400, str(error)) from error
+        service.hosts.pop(host.name, None)
+        service.executor.replace_hosts(service.hosts)
+        return {"removed": True, "name": host.name}
 
     @app.get("/api/audit")
     async def recent_audit(limit: int = 20) -> list[dict[str, Any]]:

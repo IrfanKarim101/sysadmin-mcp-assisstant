@@ -96,6 +96,18 @@ class HostOnboardingService:
             save_hosts(self.config_path, hosts)
             return host
 
+    async def remove(self, name: str) -> HostConfig:
+        """Remove one managed host and only its exact known-hosts entry."""
+        async with self._lock:
+            hosts = load_hosts(self.config_path)
+            try:
+                host = hosts.pop(name)
+            except KeyError as error:
+                raise ValueError(f"Host {name!r} does not exist") from error
+            save_hosts(self.config_path, hosts)
+            self._remove_known_host(host)
+            return host
+
     def _host_config(self, request: VMOnboardingRequest) -> HostConfig:
         return HostConfig(
             name=request.name,
@@ -126,6 +138,29 @@ class HostOnboardingService:
                 delete=False,
             ) as temporary:
                 temporary.write(existing + entry)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+                temporary_path = Path(temporary.name)
+            os.chmod(temporary_path, 0o600)
+            os.replace(temporary_path, self.known_hosts_path)
+        except OSError:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+            raise
+
+    def _remove_known_host(self, host: HostConfig) -> None:
+        if not self.known_hosts_path.exists():
+            return
+        marker = host.hostname if host.port == 22 else f"[{host.hostname}]:{host.port}"
+        lines = self.known_hosts_path.read_bytes().splitlines(keepends=True)
+        kept = [line for line in lines if line.split(b" ", 1)[0] != marker.encode()]
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=self.known_hosts_path.parent, prefix=f".{self.known_hosts_path.name}.",
+                suffix=".tmp", delete=False,
+            ) as temporary:
+                temporary.writelines(kept)
                 temporary.flush()
                 os.fsync(temporary.fileno())
                 temporary_path = Path(temporary.name)

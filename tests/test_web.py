@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
@@ -7,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sysadmin_mcp.audit import SQLiteAuditLog
+from sysadmin_mcp.auth import MAX_LOGIN_FAILURES, AuthStore
 from sysadmin_mcp.config import ConfigError, HostConfig, validate_host
 from sysadmin_mcp.models import CommandResult
 from sysadmin_mcp.web import AgentService, ChatRequest, create_app
@@ -77,7 +79,9 @@ def test_api_does_not_expose_credentials(tmp_path: Path):
         "/openapi.json", "/api/hosts", "/api/providers", "/api/audit", "/api/chat"
         , "/api/chat/sessions/{session_id}", "/api/hosts/discover-key",
         "/api/hosts/decide-key", "/api/chat/sessions", "/api/auth/login",
+        "/api/hosts/remove",
         "/api/auth/me", "/api/auth/change-password", "/api/auth/logout",
+        "/api/auth/sessions", "/api/auth/sessions/revoke", "/api/auth/events",
         "/api/fleet/health", "/api/playbooks", "/api/playbooks/run",
         "/api/security/posture"
     }
@@ -96,6 +100,52 @@ def test_unauthenticated_response_keeps_cors_headers(tmp_path: Path):
     )
     assert response.status_code == 401
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_login_throttle_and_session_revocation_require_csrf(tmp_path: Path):
+    audit = SQLiteAuditLog(tmp_path / "audit.db")
+    service = AgentService(
+        {"olaf-ubuntu": host()}, FakeExecutor(), model="test",
+        client=SimpleNamespace(responses=FakeResponses()),
+    )
+    current = [datetime(2026, 1, 1, tzinfo=UTC)]
+    app = create_app(service, audit, auth=AuthStore(audit.path, now=lambda: current[0]))
+    attacker = TestClient(app)
+    for _ in range(MAX_LOGIN_FAILURES):
+        assert attacker.post(
+            "/api/auth/login", json={"username": "admin", "password": "wrong"}
+        ).status_code == 401
+    throttled = attacker.post(
+        "/api/auth/login", json={"username": "admin", "password": "admin"}
+    )
+    assert throttled.status_code == 429
+    assert 1 <= int(throttled.headers["retry-after"]) <= 901
+
+    current[0] += timedelta(minutes=16)
+    first, second = TestClient(app), TestClient(app)
+    first_login = first.post(
+        "/api/auth/login", json={"username": "admin", "password": "admin"},
+        headers={"x-forwarded-for": "192.0.2.1"},
+    ).json()
+    assert first.post(
+        "/api/auth/change-password",
+        json={"current_password": "admin", "new_password": "a-secure-password"},
+        headers={"x-csrf-token": first_login["csrf_token"]},
+    ).status_code == 200
+    second.post(
+        "/api/auth/login", json={"username": "admin", "password": "a-secure-password"},
+        headers={"x-forwarded-for": "192.0.2.2"},
+    )
+    sessions = first.get("/api/auth/sessions").json()
+    target = next(row for row in sessions if not row["current"])
+    assert first.post(
+        "/api/auth/sessions/revoke", json={"session_id": target["session_id"]}
+    ).status_code == 403
+    assert first.post(
+        "/api/auth/sessions/revoke", json={"session_id": target["session_id"]},
+        headers={"x-csrf-token": first_login["csrf_token"]},
+    ).json() == {"revoked": True}
+    assert second.get("/api/auth/me").status_code == 401
 
 
 def test_request_rejects_disabled_or_unknown_provider():
