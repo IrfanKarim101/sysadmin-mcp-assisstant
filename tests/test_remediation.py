@@ -18,6 +18,13 @@ class FakeTransport:
         return CommandResult(command, "ActiveState=active\nSubState=running\n", "", 0)
 
 
+class InactiveTransport(FakeTransport):
+    async def run(self, host, argv):
+        command = tuple(argv)
+        self.commands.append(command)
+        return CommandResult(command, "ActiveState=inactive\nSubState=dead\n", "", 0)
+
+
 def host() -> HostConfig:
     return HostConfig(
         name="web-01", hostname="192.0.2.10", username="sentinel",
@@ -52,13 +59,16 @@ async def test_approval_is_session_bound_one_use_and_post_verified(tmp_path: Pat
     result = await service.execute_restart(preview["approval_token"], "admin", "session-a")
     assert result["verified"] is True
     assert transport.commands[-2:] == [
-        ("systemctl", "restart", "nginx.service"),
+        ("sudo", "-n", "/usr/local/bin/sysadmin-remediate", "restart-service", "nginx.service"),
         ("systemctl", "show", "nginx.service", "--no-pager",
          "--property=ActiveState,SubState,Result,ExecMainStatus"),
     ]
     with pytest.raises(RemediationDenied, match="already used"):
         await service.execute_restart(preview["approval_token"], "admin", "session-a")
-    assert [row.status for row in audit.recent(2)] == ["success", "attempted"]
+    rows = audit.recent(6)
+    assert any(row.tool_name == "restart_service" and row.status == "success" for row in rows)
+    assert any(row.tool_name == "restart_service_verify" and row.status == "success" for row in rows)
+    assert all(row.session_id == "session-a" for row in rows)
 
 
 @pytest.mark.asyncio
@@ -72,3 +82,14 @@ async def test_expired_approval_cannot_execute(tmp_path: Path):
     now[0] += 121
     with pytest.raises(RemediationDenied, match="expired"):
         await service.execute_restart(preview["approval_token"], "admin", "session")
+
+
+@pytest.mark.asyncio
+async def test_successful_command_is_not_claimed_verified_when_service_is_inactive(tmp_path: Path):
+    transport = InactiveTransport()
+    service = RemediationService(
+        {"web-01": host()}, transport, SQLiteAuditLog(tmp_path / "audit.db")
+    )
+    preview = await service.preview_restart("admin", "session", "web-01", "nginx.service")
+    result = await service.execute_restart(preview["approval_token"], "admin", "session")
+    assert result["verified"] is False

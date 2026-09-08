@@ -56,6 +56,32 @@ it also requires a separately reviewed, least-privilege host authorization for
 only the named services. Never grant generic `systemctl`, shell, or unrestricted
 sudo access to the diagnostic account.
 
+### Optional Phase 14 service restart helper
+
+Keep `restart_services` empty unless remediation is deliberately enabled. On a
+disposable host, add only exact systemd unit names to both the application host
+configuration and `/etc/sysadmin-readonly-policy.toml`. Then install and verify
+the root-owned helper and narrow sudoers rule:
+
+```sh
+sudo chown root:root /usr/local/bin/sysadmin-remediate
+sudo chmod 0755 /usr/local/bin/sysadmin-remediate
+sudo visudo -cf hardening/sysadmin-remediation.sudoers
+sudo install -o root -g root -m 0440 hardening/sysadmin-remediation.sudoers \
+  /etc/sudoers.d/sysadmin-remediation
+```
+
+The forced-command gate accepts only
+`sudo -n /usr/local/bin/sysadmin-remediate restart-service <allowlisted-unit>`.
+The helper independently reloads the root-owned policy and maps that typed
+request to `/usr/bin/systemctl restart <allowlisted-unit>` using `execve`, never
+a shell. The wildcard in sudoers cannot widen authority because extra arguments,
+different actions, and non-allowlisted unit names are rejected by both gates.
+
+Before enabling a production unit, test an inert disposable service and rerun
+the escape suite. Keep a root console open. Remove the sudoers file and clear
+`restart_services` to disable remediation immediately.
+
 ## 2. Lock down the SSH key and daemon
 
 Add only the public diagnostic key to
@@ -101,6 +127,8 @@ ssh sysadmin-readonly@test-host -- 'who | tee /tmp/phase2-pwned'
 ssh sysadmin-readonly@test-host -- 'who > /tmp/phase2-pwned'
 ssh sysadmin-readonly@test-host -- 'tail -n 10 /etc/shadow'
 ssh sysadmin-readonly@test-host -- 'systemctl restart ssh'
+ssh sysadmin-readonly@test-host -- 'sudo -n /usr/local/bin/sysadmin-remediate restart-service ssh.service'
+ssh sysadmin-readonly@test-host -- 'sudo -n /usr/local/bin/sysadmin-remediate restart-service nginx.service extra'
 ssh -L 9999:localhost:22 sysadmin-readonly@test-host -- who
 ```
 

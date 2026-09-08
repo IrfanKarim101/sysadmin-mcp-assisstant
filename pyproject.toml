@@ -17,6 +17,7 @@ sysadmin-mcp = "sysadmin_mcp.server:main"
 sysadmin-hosts = "sysadmin_mcp.host_config_cli:main"
 sysadmin-preflight = "sysadmin_mcp.preflight:main"
 sysadmin-web = "sysadmin_mcp.web:main"
+sysadmin-remediate = "sysadmin_mcp.privileged_helper:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.6.0"]

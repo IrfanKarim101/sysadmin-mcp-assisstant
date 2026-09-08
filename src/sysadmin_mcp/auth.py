@@ -124,8 +124,13 @@ class AuthStore:
     def verify_password(self, username: str, password: str) -> bool:
         with self._connect() as db:
             row = db.execute("SELECT password_hash FROM app_users WHERE username=?", (username,)).fetchone()
-        candidate = row[0] if row else _hash_password("not-the-password")
-        return row is not None and _verify_password(password, candidate)
+            candidate = row[0] if row else _hash_password("not-the-password")
+            valid = row is not None and _verify_password(password, candidate)
+            self._event(
+                db, self._utc_now(), username, "reauthentication_success" if valid
+                else "reauthentication_failure"
+            )
+        return valid
 
     def logout(self, token: str | None) -> None:
         if not token: return

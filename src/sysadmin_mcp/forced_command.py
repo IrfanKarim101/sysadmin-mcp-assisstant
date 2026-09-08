@@ -36,6 +36,7 @@ DEFAULT_BINARIES = {
     "sed": "/usr/bin/sed",
     "ss": "/usr/bin/ss",
     "systemctl": "/usr/bin/systemctl",
+    "sudo": "/usr/bin/sudo",
     "tail": "/usr/bin/tail",
     "top": "/usr/bin/top",
     "vmstat": "/usr/bin/vmstat",
@@ -152,8 +153,9 @@ def _validate_argv(argv: tuple[str, ...], allowed_logs: frozenset[PurePosixPath]
         if state_option.startswith("--state=") and state_option[8:] in SERVICE_STATES:
             return
         raise CommandDenied("service state is not approved")
-    if len(argv) == 3 and argv[:2] == ("systemctl", "restart"):
-        if argv[2] in restart_services:
+    if (len(argv) == 5 and argv[:4] ==
+            ("sudo", "-n", "/usr/local/bin/sysadmin-remediate", "restart-service")):
+        if argv[4] in restart_services:
             return
         raise CommandDenied("service restart is not approved")
     if (len(argv) == 5 and argv[:2] == ("systemctl", "show")

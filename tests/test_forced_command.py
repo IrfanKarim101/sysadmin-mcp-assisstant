@@ -95,12 +95,21 @@ def test_oversized_original_command_is_denied() -> None:
 
 def test_only_explicitly_allowlisted_service_can_be_restarted_or_previewed() -> None:
     services = frozenset({"nginx.service"})
-    for command in (
-        "systemctl restart nginx.service",
+    restart = authorize_command(
+        "sudo -n /usr/local/bin/sysadmin-remediate restart-service nginx.service",
+        ALLOWED, restart_services=services,
+    )
+    status = authorize_command(
         "systemctl show nginx.service --no-pager --property=ActiveState,SubState,Result,ExecMainStatus",
+        ALLOWED, restart_services=services,
+    )
+    assert restart[0] == "/usr/bin/sudo"
+    assert status[0] == "/usr/bin/systemctl"
+    for command in (
+        "sudo -n /usr/local/bin/sysadmin-remediate restart-service ssh.service",
+        "sudo -n /usr/local/bin/sysadmin-remediate restart-service 'nginx.service;reboot'",
+        "systemctl restart nginx.service",
     ):
-        assert authorize_command(command, ALLOWED, restart_services=services)[0] == "/usr/bin/systemctl"
-    for command in ("systemctl restart ssh.service", "systemctl restart 'nginx.service;reboot'"):
         with pytest.raises(CommandDenied):
             authorize_command(command, ALLOWED, restart_services=services)
 

@@ -14,6 +14,7 @@ from .models import CommandResult
 from .transport import Transport
 
 APPROVAL_TTL_SECONDS = 120
+MAX_PENDING_APPROVALS = 1_000
 STATUS_PROPERTIES = "ActiveState,SubState,Result,ExecMainStatus"
 
 
@@ -51,12 +52,19 @@ class RemediationService:
     async def preview_restart(self, username: str, session_id: str, host: str,
                               service: str) -> dict[str, object]:
         target, normalized = self._authorize(host, service)
-        before = await self._transport.run(target, self._status_command(normalized))
+        before = await self._audited_run(
+            target, self._status_command(normalized), "restart_service_preview",
+            normalized, session_id,
+        )
+        if before.exit_status != 0:
+            raise RemediationDenied("Current service state could not be verified")
+        self._discard_expired()
+        if len(self._approvals) >= MAX_PENDING_APPROVALS:
+            raise RemediationDenied("Approval capacity is temporarily exhausted")
         token = secrets.token_urlsafe(32)
         self._approvals[_digest(token)] = Approval(
             username, session_id, host, normalized, self._clock() + APPROVAL_TTL_SECONDS
         )
-        self._discard_expired()
         return {
             "approval_token": token, "expires_in_seconds": APPROVAL_TTL_SECONDS,
             "host": host, "service": normalized,
@@ -72,21 +80,26 @@ class RemediationService:
         if approval.username != username or approval.session_id != session_id:
             raise RemediationDenied("Approval does not belong to this authenticated session")
         target, service = self._authorize(approval.host, approval.service)
-        command = ("systemctl", "restart", service)
+        command = (
+            "sudo", "-n", "/usr/local/bin/sysadmin-remediate", "restart-service", service
+        )
         request_id, started = str(uuid4()), perf_counter()
-        self._append(request_id, target.name, service, command, "attempted")
+        self._append(request_id, session_id, target.name, service, command, "attempted")
         try:
             action = await self._transport.run(target, command)
-            after = await self._transport.run(target, self._status_command(service))
+            after = await self._audited_run(
+                target, self._status_command(service), "restart_service_verify", service, session_id
+            )
         except Exception as error:
-            self._append(request_id, target.name, service, command, "error",
+            self._append(request_id, session_id, target.name, service, command, "error",
                          f"{type(error).__name__}: {error}", started)
             raise
         status = "success" if action.exit_status == 0 else "error"
-        self._append(request_id, target.name, service, command, status,
+        self._append(request_id, session_id, target.name, service, command, status,
                      action.stdout + action.stderr, started)
+        verified = action.exit_status == 0 and after.exit_status == 0 and _is_active(after.stdout)
         return {"host": target.name, "service": service, "action": _result(action),
-                "after": _result(after), "verified": action.exit_status == 0 and after.exit_status == 0}
+                "after": _result(after), "verified": verified}
 
     def _authorize(self, host: str, service: str) -> tuple[HostConfig, str]:
         try:
@@ -106,11 +119,28 @@ class RemediationService:
         self._approvals = {key: value for key, value in self._approvals.items()
                            if value.expires_at >= now}
 
-    def _append(self, request_id: str, host: str, service: str, command: tuple[str, ...],
-                status: str, output: str | None = None, started: float | None = None) -> None:
+    async def _audited_run(self, target: HostConfig, command: tuple[str, ...], tool: str,
+                           service: str, session_id: str) -> CommandResult:
+        request_id, started = str(uuid4()), perf_counter()
+        self._append(request_id, session_id, target.name, service, command, "attempted", tool=tool)
+        try:
+            result = await self._transport.run(target, command)
+        except Exception as error:
+            self._append(request_id, session_id, target.name, service, command, "error",
+                         f"{type(error).__name__}: {error}", started, tool)
+            raise
+        self._append(request_id, session_id, target.name, service, command,
+                     "success" if result.exit_status == 0 else "error",
+                     result.stdout + result.stderr, started, tool)
+        return result
+
+    def _append(self, request_id: str, session_id: str, host: str, service: str,
+                command: tuple[str, ...],
+                status: str, output: str | None = None, started: float | None = None,
+                tool: str = "restart_service") -> None:
         self._audit.append(AuditEvent(
-            request_id=request_id, session_id=None, target_host=host,
-            tool_name="restart_service", parameters={"service": service}, command=command,
+            request_id=request_id, session_id=session_id, target_host=host,
+            tool_name=tool, parameters={"service": service}, command=command,
             status=status, output=output,
             duration_ms=None if started is None else round((perf_counter()-started)*1000),
         ))
@@ -123,3 +153,7 @@ def _digest(token: str) -> str:
 def _result(result: CommandResult) -> dict[str, object]:
     return {"command": list(result.command), "stdout": result.stdout, "stderr": result.stderr,
             "exit_status": result.exit_status, "truncated": result.truncated}
+
+
+def _is_active(output: str) -> bool:
+    return any(line.strip() == "ActiveState=active" for line in output.splitlines())
