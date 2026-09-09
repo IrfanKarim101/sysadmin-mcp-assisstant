@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 HOST_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 USERNAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,31}\Z")
 SERVICE_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}(?:\.service)?\Z")
+BACKUP_JOB_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
 
 
 class ConfigError(ValueError):
@@ -44,6 +45,7 @@ class HostConfig:
     password_env: str | None = None
     thresholds: ResourceThresholds = ResourceThresholds()
     restart_services: frozenset[str] = frozenset()
+    backup_jobs: frozenset[str] = frozenset()
 
 
 def load_hosts(path: Path) -> dict[str, HostConfig]:
@@ -88,6 +90,9 @@ def load_hosts(path: Path) -> dict[str, HostConfig]:
                 ),
                 restart_services=frozenset(
                     _string_list(values.get("restart_services", []), "restart_services", allow_empty=True)
+                ),
+                backup_jobs=frozenset(
+                    _string_list(values.get("backup_jobs", []), "backup_jobs", allow_empty=True)
                 ),
             )
         except (KeyError, TypeError) as error:
@@ -143,6 +148,9 @@ def validate_host(host: HostConfig) -> None:
     if not all(isinstance(service, str) and SERVICE_NAME_PATTERN.fullmatch(service)
                for service in host.restart_services):
         raise ConfigError(f"Host {host.name!r} has an invalid restart service")
+    if not all(isinstance(job, str) and BACKUP_JOB_PATTERN.fullmatch(job)
+               for job in host.backup_jobs):
+        raise ConfigError(f"Host {host.name!r} has an invalid backup job")
 
 
 def save_hosts(path: Path, hosts: dict[str, HostConfig]) -> None:
@@ -214,6 +222,7 @@ def _serialize_hosts(hosts: dict[str, HostConfig]) -> str:
                 *( [f"password_env = {json.dumps(host.password_env)}"] if host.password_env else [] ),
                 "allowed_logs = " + _toml_array(str(log) for log in sorted(host.allowed_logs)),
                 "restart_services = " + _toml_array(sorted(host.restart_services)),
+                "backup_jobs = " + _toml_array(sorted(host.backup_jobs)),
                 "",
                 f"[hosts.{table_name}.thresholds]",
                 f"cpu_percent = {float(host.thresholds.cpu_percent)}",

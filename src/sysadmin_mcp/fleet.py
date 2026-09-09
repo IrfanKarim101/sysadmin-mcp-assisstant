@@ -9,10 +9,12 @@ from typing import Any
 
 from .config import HostConfig
 from .executor import ReadOnlyExecutor
+from .fleet_store import FleetSnapshotStore
 
 MAX_FLEET_HOSTS = 50
 MAX_FLEET_CONCURRENCY = 4
 FLEET_HOST_TIMEOUT_SECONDS = 75.0
+CIRCUIT_FAILURE_THRESHOLD = 3
 
 
 class FleetHealthService:
@@ -22,18 +24,28 @@ class FleetHealthService:
         *,
         concurrency: int = MAX_FLEET_CONCURRENCY,
         timeout_seconds: float = FLEET_HOST_TIMEOUT_SECONDS,
+        store: FleetSnapshotStore | None = None,
     ) -> None:
         if not 1 <= concurrency <= MAX_FLEET_CONCURRENCY or timeout_seconds <= 0:
             raise ValueError("fleet bounds are invalid")
         self.executor = executor
         self.concurrency = concurrency
         self.timeout_seconds = timeout_seconds
+        self.store = store
+        self._failures: dict[str, int] = {}
+        self._snapshot_lock = asyncio.Lock()
 
     async def snapshot(self, hosts: Mapping[str, HostConfig]) -> list[dict[str, Any]]:
+        async with self._snapshot_lock:
+            return await self._snapshot(hosts)
+
+    async def _snapshot(self, hosts: Mapping[str, HostConfig]) -> list[dict[str, Any]]:
         selected = list(hosts.values())[:MAX_FLEET_HOSTS]
         semaphore = asyncio.Semaphore(self.concurrency)
 
         async def inspect(host: HostConfig) -> dict[str, Any]:
+            if self._failures.get(host.name, 0) >= CIRCUIT_FAILURE_THRESHOLD:
+                return _offline_snapshot(host, "Circuit open after repeated failures")
             async with semaphore:
                 try:
                     async with asyncio.timeout(self.timeout_seconds):
@@ -41,13 +53,19 @@ class FleetHealthService:
                             self.executor.check_resources(host.name),
                             self.executor.check_disk_usage(host.name),
                         )
+                    self._failures.pop(host.name, None)
                     return _healthy_snapshot(host, resources[0].stdout, resources[1].stdout, disks[0].stdout)
                 except TimeoutError:
+                    self._failures[host.name] = self._failures.get(host.name, 0) + 1
                     return _offline_snapshot(host, "Health check timed out")
                 except Exception:  # noqa: BLE001 - fleet failures are intentionally isolated
+                    self._failures[host.name] = self._failures.get(host.name, 0) + 1
                     return _offline_snapshot(host, "Host is unreachable or diagnostics were denied")
 
-        return list(await asyncio.gather(*(inspect(host) for host in selected)))
+        snapshots = list(await asyncio.gather(*(inspect(host) for host in selected)))
+        if self.store is not None:
+            self.store.append_many(snapshots)
+        return snapshots
 
 
 def _healthy_snapshot(host: HostConfig, top: str, free: str, disk: str) -> dict[str, Any]:

@@ -107,6 +107,12 @@ class ReadOnlyExecutor:
     async def check_docker(self, host: str) -> tuple[CommandResult, ...]:
         return await self._fixed_many(host, "check_docker", self._policy.docker_status())
 
+    async def check_system_inventory(self, host: str) -> tuple[CommandResult, ...]:
+        return await self._fixed_many(host, "check_system_inventory", self._policy.system_inventory())
+
+    async def check_security_inventory(self, host: str) -> tuple[CommandResult, ...]:
+        return await self._fixed_many(host, "check_security_inventory", self._policy.security_inventory())
+
     async def read_log(self, host: str, logfile: str, mode: str, lines: int = 100) -> CommandResult:
         parameters = {"logfile": logfile, "mode": mode, "lines": lines}
         try:

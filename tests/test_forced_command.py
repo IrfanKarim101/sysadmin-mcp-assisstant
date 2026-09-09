@@ -49,6 +49,11 @@ def authorize(argv: tuple[str, ...]) -> tuple[str, ...]:
         ("ip", "route", "show"),
         ("ps", "-eo", "pid,ppid,user,stat,%cpu,%mem,comm", "--sort=-%cpu"),
         ("docker", "stats", "--no-stream", "--format", "{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"),
+        ("uname", "-srvmo"),
+        ("uptime", "-p"),
+        ("timedatectl", "show", "--property=NTPSynchronized,Timezone"),
+        ("apt-get", "-s", "upgrade"),
+        ("getent", "passwd"),
     ],
 )
 def test_exact_read_only_commands_are_authorized(argv: tuple[str, ...]) -> None:
@@ -144,6 +149,8 @@ def test_os_gate_accepts_every_phase_one_command_shape() -> None:
         *policy.top_processes(),
         *policy.network_status(),
         *policy.docker_status(),
+        *policy.system_inventory(),
+        *policy.security_inventory(),
     ]
     for command in commands:
         authorize(command)

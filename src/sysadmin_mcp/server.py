@@ -163,6 +163,16 @@ def create_mcp_server(
         results = await _limited_call(limiter, rate_key, lambda: executor.check_docker(host))
         return await _present_many(result_presenter, "check_docker", results)
 
+    @server.tool(name="check_system_inventory", description="Inspect OS, uptime, boots, NTP, timers, hardware, disks, and RAID with fixed read-only commands.", annotations=READ_ONLY_ANNOTATIONS, structured_output=True)
+    async def check_system_inventory(host: str) -> PresentedMultiCommandOutput:
+        results = await _limited_call(limiter, rate_key, lambda: executor.check_system_inventory(host))
+        return await _present_many(result_presenter, "check_system_inventory", results)
+
+    @server.tool(name="check_security_inventory", description="Inspect firewall, simulated updates, users, and groups with fixed read-only commands.", annotations=READ_ONLY_ANNOTATIONS, structured_output=True)
+    async def check_security_inventory(host: str) -> PresentedMultiCommandOutput:
+        results = await _limited_call(limiter, rate_key, lambda: executor.check_security_inventory(host))
+        return await _present_many(result_presenter, "check_security_inventory", results)
+
     @server.tool(
         name="read_log",
         description=(

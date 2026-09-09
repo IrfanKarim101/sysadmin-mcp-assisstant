@@ -11,9 +11,10 @@ from time import monotonic
 from uuid import uuid4
 
 import asyncssh
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from .config import HostConfig, ResourceThresholds, load_hosts, save_hosts, validate_host
+from .credential_vault import CredentialVault
 
 PENDING_TTL_SECONDS = 300
 
@@ -25,11 +26,19 @@ class VMOnboardingRequest(BaseModel):
     hostname: str = Field(min_length=1, max_length=253)
     port: int = Field(default=22, ge=1, le=65535)
     username: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_-]{0,31}$")
-    password_env: str = Field(pattern=r"^[A-Z][A-Z0-9_]{0,127}$")
+    password: SecretStr | None = Field(default=None, min_length=1, max_length=256)
+    password_env: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{0,127}$")
     allowed_logs: list[str] = Field(min_length=1, max_length=20)
     cpu_threshold: float = Field(default=90.0, gt=0, le=100)
     memory_threshold: float = Field(default=90.0, gt=0, le=100)
     restart_services: list[str] = Field(default_factory=list, max_length=10)
+    backup_jobs: list[str] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def credential(self):
+        if self.password is None and self.password_env is None:
+            raise ValueError("password is required")
+        return self
 
 
 @dataclass(frozen=True)
@@ -40,11 +49,13 @@ class PendingHostKey:
 
 
 class HostOnboardingService:
-    def __init__(self, config_path: Path, known_hosts_path: Path) -> None:
+    def __init__(self, config_path: Path, known_hosts_path: Path,
+                 vault: CredentialVault | None = None) -> None:
         self.config_path = config_path
         self.known_hosts_path = known_hosts_path.resolve()
         self._pending: dict[str, PendingHostKey] = {}
         self._lock = asyncio.Lock()
+        self.vault = vault
 
     async def discover(self, request: VMOnboardingRequest) -> dict[str, object]:
         candidate = self._host_config(request)
@@ -95,6 +106,10 @@ class HostOnboardingService:
             self._append_known_host(host, pending.public_key)
             hosts[host.name] = host
             save_hosts(self.config_path, hosts)
+            if request.password is not None:
+                if self.vault is None:
+                    raise RuntimeError("Encrypted credential vault is unavailable")
+                self.vault.set(host.name, request.password.get_secret_value())
             return host
 
     async def remove(self, name: str) -> HostConfig:
@@ -107,6 +122,8 @@ class HostOnboardingService:
                 raise ValueError(f"Host {name!r} does not exist") from error
             save_hosts(self.config_path, hosts)
             self._remove_known_host(host)
+            if self.vault is not None:
+                self.vault.delete(host.name)
             return host
 
     def _host_config(self, request: VMOnboardingRequest) -> HostConfig:
@@ -117,13 +134,14 @@ class HostOnboardingService:
             username=request.username,
             known_hosts=str(self.known_hosts_path),
             client_keys=(),
-            password_env=request.password_env,
+            password_env=request.password_env or f"SENTINEL_VAULT_{request.name.upper().replace('-', '_')}",
             allowed_logs=frozenset(PurePosixPath(item) for item in request.allowed_logs),
             thresholds=ResourceThresholds(
                 cpu_percent=request.cpu_threshold,
                 memory_percent=request.memory_threshold,
             ),
             restart_services=frozenset(request.restart_services),
+            backup_jobs=frozenset(request.backup_jobs),
         )
 
     def _append_known_host(self, host: HostConfig, public_key: bytes) -> None:

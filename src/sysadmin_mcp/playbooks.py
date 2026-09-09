@@ -60,6 +60,14 @@ PLAYBOOKS = {
             "Inspect container state and host resource pressure.",
             ("check_docker", "check_resources"),
         ),
+        Playbook("ssh-failure", "SSH failure", "Inspect networking, listeners, and security state.",
+                 ("check_network", "check_ports", "check_security_inventory")),
+        Playbook("unexpected-reboot", "Unexpected reboot", "Inspect boot history and current pressure.",
+                 ("check_system_inventory", "check_resources")),
+        Playbook("high-load", "High load", "Inspect load, resources, and process pressure.",
+                 ("check_resources", "check_top_processes", "check_system_inventory")),
+        Playbook("security-review", "Security review", "Inspect firewall, updates, identities, and ports.",
+                 ("check_security_inventory", "check_ports")),
     )
 }
 
@@ -91,7 +99,8 @@ class PlaybookRunner:
             async with asyncio.timeout(self.timeout_seconds):
                 for step in playbook.steps:
                     results = await self._invoke(step, host)
-                    evidence.append({"step": step, "results": [_result(item) for item in results]})
+                    evidence.append({"step": step, "kind": "fact",
+                                     "results": [_result(item) for item in results]})
         except TimeoutError:
             return _response(playbook, host, "timeout", evidence, "Playbook timed out")
         except Exception:  # noqa: BLE001 - transport/policy details are not exposed
@@ -115,6 +124,10 @@ class PlaybookRunner:
             return tuple(await self.executor.check_network(host))
         if step == "check_docker":
             return tuple(await self.executor.check_docker(host))
+        if step == "check_system_inventory":
+            return tuple(await self.executor.check_system_inventory(host))
+        if step == "check_security_inventory":
+            return tuple(await self.executor.check_security_inventory(host))
         raise RuntimeError("playbook contains an unapproved step")
 
 
@@ -138,4 +151,5 @@ def _response(
         "status": status,
         "message": message,
         "evidence": evidence,
+        "interpretation": message,
     }

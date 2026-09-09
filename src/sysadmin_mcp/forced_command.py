@@ -23,6 +23,7 @@ MAX_ARGUMENTS = 16
 MAX_LINES = 500
 MAX_PATTERN_LENGTH = 256
 SERVICE_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}(?:\.service)?\Z")
+BACKUP_JOB_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
 
 DEFAULT_BINARIES = {
     "df": "/usr/bin/df",
@@ -42,6 +43,15 @@ DEFAULT_BINARIES = {
     "vmstat": "/usr/bin/vmstat",
     "w": "/usr/bin/w",
     "who": "/usr/bin/who",
+    "uname": "/usr/bin/uname",
+    "uptime": "/usr/bin/uptime",
+    "timedatectl": "/usr/bin/timedatectl",
+    "journalctl": "/usr/bin/journalctl",
+    "lscpu": "/usr/bin/lscpu",
+    "lsblk": "/usr/bin/lsblk",
+    "ufw": "/usr/sbin/ufw",
+    "apt-get": "/usr/bin/apt-get",
+    "getent": "/usr/bin/getent",
 }
 
 SAFE_ENVIRONMENT = {
@@ -61,6 +71,19 @@ FIXED_COMMANDS = frozenset(
         ("vmstat", "1", "2"),
         ("w", "-h"),
         ("who",),
+        ("uname", "-srvmo"),
+        ("uptime", "-p"),
+        ("who", "-b"),
+        ("timedatectl", "show", "--property=NTPSynchronized,Timezone"),
+        ("journalctl", "--list-boots", "--no-pager", "-n", "10"),
+        ("systemctl", "list-timers", "--all", "--no-pager", "--no-legend"),
+        ("lscpu",),
+        ("lsblk", "-J", "-o", "NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS"),
+        ("head", "-n", "200", "/proc/mdstat"),
+        ("ufw", "status"),
+        ("apt-get", "-s", "upgrade"),
+        ("getent", "passwd"),
+        ("getent", "group"),
         SERVICE_BASE,
         ("df", "-P", "-h"),
         ("df", "-P", "-i"),
@@ -108,6 +131,26 @@ def load_restart_services(path: str = DEFAULT_POLICY_PATH) -> frozenset[str]:
     return frozenset(raw)
 
 
+def load_backup_jobs(path: str = DEFAULT_POLICY_PATH) -> dict[str, PurePosixPath]:
+    """Load typed backup IDs mapped to fixed scripts beneath /root."""
+    with open(path, "rb") as policy_file:
+        values = tomllib.load(policy_file)
+    raw = values.get("policy", {}).get("backup_jobs", {})
+    if not isinstance(raw, dict):
+        raise CommandDenied("policy backup_jobs must be a table")
+    jobs: dict[str, PurePosixPath] = {}
+    for name, value in raw.items():
+        if not isinstance(name, str) or not BACKUP_JOB_PATTERN.fullmatch(name):
+            raise CommandDenied("policy contains an unsafe backup job name")
+        if not isinstance(value, str) or any(char in value for char in ("\x00", "\n", "\r")):
+            raise CommandDenied("policy contains an unsafe backup script path")
+        script = PurePosixPath(value)
+        if not script.is_absolute() or script.parent != PurePosixPath("/root"):
+            raise CommandDenied("backup scripts must be direct children of /root")
+        jobs[name] = script
+    return jobs
+
+
 def validate_policy_file(path: str = DEFAULT_POLICY_PATH) -> None:
     """Require a regular, root-owned policy which no non-root user can modify."""
     metadata = os.stat(path, follow_symlinks=False)
@@ -124,6 +167,7 @@ def authorize_command(
     allowed_logs: frozenset[PurePosixPath],
     binaries: Mapping[str, str] = DEFAULT_BINARIES,
     restart_services: frozenset[str] = frozenset(),
+    backup_jobs: frozenset[str] = frozenset(),
 ) -> tuple[str, ...]:
     """Return an absolute argv only when the request matches an approved form."""
     if not original_command:
@@ -137,7 +181,7 @@ def authorize_command(
     if not argv or len(argv) > MAX_ARGUMENTS:
         raise CommandDenied("invalid argument count")
 
-    _validate_argv(argv, allowed_logs, restart_services)
+    _validate_argv(argv, allowed_logs, restart_services, backup_jobs)
     binary = binaries.get(argv[0])
     if binary is None or not PurePosixPath(binary).is_absolute():
         raise CommandDenied("approved binary is not configured safely")
@@ -145,7 +189,8 @@ def authorize_command(
 
 
 def _validate_argv(argv: tuple[str, ...], allowed_logs: frozenset[PurePosixPath],
-                   restart_services: frozenset[str]) -> None:
+                   restart_services: frozenset[str],
+                   backup_jobs: frozenset[str] = frozenset()) -> None:
     if argv in FIXED_COMMANDS:
         return
     if len(argv) == len(SERVICE_BASE) + 1 and argv[: len(SERVICE_BASE)] == SERVICE_BASE:
@@ -158,6 +203,11 @@ def _validate_argv(argv: tuple[str, ...], allowed_logs: frozenset[PurePosixPath]
         if argv[4] in restart_services:
             return
         raise CommandDenied("service restart is not approved")
+    if (len(argv) == 5 and argv[:4] ==
+            ("sudo", "-n", "/usr/local/bin/sysadmin-remediate", "run-backup")):
+        if argv[4] in backup_jobs:
+            return
+        raise CommandDenied("backup job is not approved")
     if (len(argv) == 5 and argv[:2] == ("systemctl", "show")
             and argv[2] in restart_services and argv[3] == "--no-pager"
             and argv[4] == "--property=ActiveState,SubState,Result,ExecMainStatus"):
@@ -213,9 +263,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         validate_policy_file()
         allowed_logs = load_allowed_logs()
         restart_services = load_restart_services()
+        backup_jobs = frozenset(load_backup_jobs())
         command = authorize_command(
             os.environ.get("SSH_ORIGINAL_COMMAND"), allowed_logs,
             restart_services=restart_services,
+            backup_jobs=backup_jobs,
         )
     except (CommandDenied, OSError, tomllib.TOMLDecodeError) as error:
         print(f"read-only policy denied request: {error}", file=sys.stderr)

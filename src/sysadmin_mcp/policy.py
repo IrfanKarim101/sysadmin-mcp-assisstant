@@ -70,6 +70,22 @@ class ReadOnlyCommandPolicy:
             ("docker", "stats", "--no-stream", "--format", stats_format),
         )
 
+    def system_inventory(self) -> tuple[Command, ...]:
+        return (
+            ("uname", "-srvmo"), ("uptime", "-p"), ("who", "-b"),
+            ("timedatectl", "show", "--property=NTPSynchronized,Timezone"),
+            ("journalctl", "--list-boots", "--no-pager", "-n", "10"),
+            ("systemctl", "list-timers", "--all", "--no-pager", "--no-legend"),
+            ("lscpu",), ("lsblk", "-J", "-o", "NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS"),
+            ("head", "-n", "200", "/proc/mdstat"),
+        )
+
+    def security_inventory(self) -> tuple[Command, ...]:
+        return (
+            ("ufw", "status"), ("apt-get", "-s", "upgrade"),
+            ("getent", "passwd"), ("getent", "group"),
+        )
+
     def read_log(self, host: str, logfile: str, mode: str, lines: int = 100) -> Command:
         log_path = self._allowed_log(host, logfile)
         if mode not in LOG_MODES:

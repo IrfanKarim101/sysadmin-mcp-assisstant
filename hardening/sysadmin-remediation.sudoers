@@ -1,3 +1,4 @@
 # Validate with visudo -cf before installing as /etc/sudoers.d/sysadmin-remediation.
 # The root-owned helper revalidates the exact service against the root-owned policy.
 sysadmin-readonly ALL=(root) NOPASSWD: /usr/local/bin/sysadmin-remediate restart-service *
+sysadmin-readonly ALL=(root) NOPASSWD: /usr/local/bin/sysadmin-remediate run-backup *

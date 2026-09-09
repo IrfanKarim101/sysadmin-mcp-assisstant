@@ -10,6 +10,9 @@ client_keys = ["~/.ssh/sysadmin_readonly"]
 allowed_logs = ["/var/log/auth.log", "/var/log/syslog"]
 # Empty by default. Phase 14 actions must be explicitly named per host.
 restart_services = []
+backup_jobs = []
+# Typed job IDs only. The root-owned host policy maps IDs to exact script paths.
+backup_jobs = []
 
 [hosts.example.thresholds]
 cpu_percent = 90.0

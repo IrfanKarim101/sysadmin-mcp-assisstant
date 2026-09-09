@@ -39,6 +39,14 @@ class FakeExecutor:
         self.calls.append(("docker", host))
         return (result("docker"), result("docker"))
 
+    async def check_system_inventory(self, host):
+        self.calls.append(("system", host))
+        return (result("uname"),)
+
+    async def check_security_inventory(self, host):
+        self.calls.append(("security", host))
+        return (result("ufw"),)
+
 
 def result(command):
     return CommandResult((command,), "bounded evidence", "", 0)
@@ -51,6 +59,10 @@ async def test_playbooks_have_bounded_fixed_steps_and_execute_in_order():
     assert all(len(item.steps) <= MAX_PLAYBOOK_STEPS for item in PLAYBOOKS.values())
     response = await runner.run("network-issue", "vm-1")
     assert response["status"] == "complete"
+    assert all(item["kind"] == "fact" for item in response["evidence"])
+    assert response["interpretation"] == response["message"]
+    assert all(item["kind"] == "fact" for item in response["evidence"])
+    assert response["interpretation"] == response["message"]
     assert executor.calls == [("network", "vm-1"), ("ports", "vm-1")]
 
 

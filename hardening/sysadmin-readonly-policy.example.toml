@@ -4,3 +4,7 @@
 [policy]
 allowed_logs = ["/var/log/auth.log", "/var/log/syslog"]
 restart_services = []
+
+# The client sends only the ID; this root-owned policy selects the executable.
+[policy.backup_jobs]
+database-dump = "/root/database-dump.sh"

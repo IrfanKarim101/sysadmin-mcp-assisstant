@@ -82,6 +82,29 @@ Before enabling a production unit, test an inert disposable service and rerun
 the escape suite. Keep a root console open. Remove the sudoers file and clear
 `restart_services` to disable remediation immediately.
 
+### Optional database dump job
+
+Place the script at the exact path configured in the root-owned policy. The
+default example uses `/root/database-dump.sh`. The helper accepts no script
+arguments and never invokes a shell; the script itself must contain all required
+database and destination configuration.
+
+```sh
+sudo install -o root -g root -m 0700 database-dump.sh /root/database-dump.sh
+sudo install -o root -g root -m 0644 \
+  hardening/sysadmin-readonly-policy.example.toml \
+  /etc/sysadmin-readonly-policy.toml
+sudo install -o root -g root -m 0440 hardening/sysadmin-remediation.sudoers \
+  /etc/sudoers.d/sysadmin-remediation
+sudo visudo -cf /etc/sudoers.d/sysadmin-remediation
+```
+
+Enable only the matching `database-dump` ID in the application's host
+configuration. The browser never receives or submits `/root` paths. Before
+production use, ensure the script writes dumps to a root-controlled directory,
+uses restrictive permissions, fails on database errors, and exits nonzero on
+failure. Remove the job from both policies to disable it.
+
 ## 2. Lock down the SSH key and daemon
 
 Add only the public diagnostic key to

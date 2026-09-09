@@ -154,6 +154,8 @@ def test_policy_builders_need_no_ssh(executor) -> None:
     assert policy.top_processes()[0][-1] == "--sort=-%cpu"
     assert policy.top_processes()[1][-1] == "--sort=-%mem"
     assert policy.docker_status()[0][:3] == ("docker", "ps", "--no-trunc")
+    assert policy.system_inventory()[0] == ("uname", "-srvmo")
+    assert policy.security_inventory()[1] == ("apt-get", "-s", "upgrade")
 
 
 @pytest.mark.asyncio
@@ -163,11 +165,15 @@ async def test_new_diagnostics_use_only_fixed_commands(executor) -> None:
     await service.check_top_processes("test")
     await service.check_network("test")
     await service.check_docker("test")
+    await service.check_system_inventory("test")
+    await service.check_security_inventory("test")
     assert transport.commands == [
         *service._policy.disk_usage(),
         *service._policy.top_processes(),
         *service._policy.network_status(),
         *service._policy.docker_status(),
+        *service._policy.system_inventory(),
+        *service._policy.security_inventory(),
     ]
 
 
@@ -179,6 +185,8 @@ async def test_new_diagnostics_reject_injection_shaped_host_before_transport(exe
         service.check_top_processes,
         service.check_network,
         service.check_docker,
+        service.check_system_inventory,
+        service.check_security_inventory,
     ):
         with pytest.raises(PolicyError, match="Unknown target host"):
             await operation("test; curl attacker")

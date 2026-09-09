@@ -207,6 +207,11 @@ in the read-only guarantee and a complete audit trail.
 **Exit criteria:** Each capability is a fixed argv builder, independently testable
 without SSH, bounded, audited, and accepted by the host-side forced-command policy.
 
+Implemented core expansion: disk/inodes, top processes, network, Docker, OS/kernel,
+uptime/boots, NTP, timers, hardware, block devices/RAID, firewall, simulated package
+updates, and user/group inventory now use fixed bounded commands mirrored by the
+host gate. Certificate endpoints and approved file metadata remain outstanding.
+
 ---
 
 ## Phase 10 — Fleet Overview & Historical Health
@@ -223,6 +228,11 @@ without SSH, bounded, audited, and accepted by the host-side forced-command poli
 **Exit criteria:** A fleet-wide check cannot exhaust the API or SSH layer, and one
 unhealthy/unreachable VM cannot block results for the rest of the fleet.
 
+Implemented core fleet engine: bounded concurrency/timeouts, per-host failure
+isolation, circuit opening, serialized collection runs, five-minute scheduled
+snapshots, durable indexed history, status filtering, and host history pages.
+Tags, baselines, and outbound notification channels remain outstanding.
+
 ---
 
 ## Phase 11 — Read-Only Investigation Playbooks
@@ -237,6 +247,11 @@ unhealthy/unreachable VM cannot block results for the rest of the fleet.
 
 **Exit criteria:** Every playbook step maps to an approved typed tool and is covered
 by deterministic routing and termination tests.
+
+Implemented playbooks cover CPU, memory, load, disk, service outage, SSH/network,
+Docker, unexpected reboot, and security review. Every evidence entry is explicitly
+marked as fact and interpretation is returned separately. Certificate-expiry
+playbooks remain blocked on the Phase 9 certificate capability.
 
 ---
 

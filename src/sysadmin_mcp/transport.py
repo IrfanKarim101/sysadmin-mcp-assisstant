@@ -29,11 +29,13 @@ class AsyncSSHTransport:
         *,
         timeout_seconds: float = 15.0,
         max_output_bytes: int = MAX_TRANSPORT_OUTPUT_BYTES,
+        password_provider: Callable[[HostConfig], str | None] | None = None,
     ) -> None:
         if timeout_seconds <= 0 or max_output_bytes < 1:
             raise ValueError("transport limits must be positive")
         self.timeout_seconds = timeout_seconds
         self.max_output_bytes = max_output_bytes
+        self.password_provider = password_provider
 
     async def run(self, host: HostConfig, argv: Sequence[str]) -> CommandResult:
         # SSH exec requests are strings. shlex.join is POSIX-safe serialization;
@@ -41,7 +43,8 @@ class AsyncSSHTransport:
         import asyncssh
 
         command = tuple(argv)
-        password = os.environ.get(host.password_env) if host.password_env else None
+        password = self.password_provider(host) if self.password_provider else None
+        password = password or (os.environ.get(host.password_env) if host.password_env else None)
         if host.password_env and password is None:
             raise RuntimeError(f"required credential environment variable is not set: {host.password_env}")
         async with asyncssh.connect(

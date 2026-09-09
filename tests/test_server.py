@@ -61,6 +61,8 @@ async def test_server_exposes_only_typed_read_only_tools(mcp_adapter) -> None:
         "check_top_processes",
         "check_network",
         "check_docker",
+        "check_system_inventory",
+        "check_security_inventory",
     }
     for tool in tools:
         assert tool.annotations.read_only_hint is True

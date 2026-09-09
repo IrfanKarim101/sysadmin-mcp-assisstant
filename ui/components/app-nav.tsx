@@ -2,11 +2,11 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
-import { History, LogOut, Menu, MonitorCog, Server, ShieldCheck, TerminalSquare, UserRound, Workflow, Wrench, X } from 'lucide-react';
+import { DatabaseBackup, History, LogOut, Menu, MonitorCog, Server, ShieldCheck, TerminalSquare, UserRound, Workflow, Wrench, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { apiFetch } from '@/lib/api';
 
-const links=[['/','Console',TerminalSquare],['/fleet','Fleet',Server],['/vms','VM management',MonitorCog],['/playbooks','Playbooks',Workflow],['/security','Security',ShieldCheck],['/remediation','Remediation',Wrench],['/history','History',History],['/account','Account',UserRound]] as const;
+const links=[['/','Console',TerminalSquare],['/fleet','Fleet',Server],['/vms','VM management',MonitorCog],['/playbooks','Playbooks',Workflow],['/security','Security',ShieldCheck],['/remediation','Remediation',Wrench],['/backups','Database backups',DatabaseBackup],['/history','History',History],['/account','Account',UserRound]] as const;
 
 export function AppNav(){
  const path=usePathname(),[open,setOpen]=useState(false);

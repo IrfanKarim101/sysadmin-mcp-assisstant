@@ -22,10 +22,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import SQLiteAuditLog
 from .auth import ABSOLUTE_TIMEOUT, SESSION_COOKIE, AuthStore, LoginThrottled
+from .backups import BackupDenied, BackupService
 from .chat_store import MAX_CONTENT_CHARS, SQLiteChatStore
 from .config import HostConfig, load_hosts
+from .credential_vault import CredentialVault
 from .executor import ReadOnlyExecutor
 from .fleet import FleetHealthService
+from .fleet_store import FleetSnapshotStore
 from .models import CommandResult
 from .onboarding import HostOnboardingService, VMOnboardingRequest
 from .playbooks import PlaybookRunner
@@ -91,6 +94,7 @@ class PlaybookRequest(BaseModel):
     playbook_id: Literal[
         "high-cpu", "high-memory", "disk-pressure", "service-outage",
         "network-issue", "docker-health",
+        "ssh-failure", "unexpected-reboot", "high-load", "security-review",
     ]
     host: str = Field(min_length=1, max_length=64)
 
@@ -112,6 +116,18 @@ class RestartExecuteRequest(BaseModel):
     approval_token: str = Field(min_length=32, max_length=256)
 
 
+class BackupPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = Field(min_length=1, max_length=64)
+    job: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    password: str = Field(min_length=1, max_length=256)
+
+
+class BackupExecuteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approval_token: str = Field(min_length=32, max_length=256)
+
+
 TOOLS: list[dict[str, Any]] = [
     {"type": "function", "name": "check_ports", "description": "List listening TCP/UDP ports.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "check_services", "description": "List systemd services, optionally by state.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}, "state_filter": {"type": ["string", "null"], "enum": ["active", "inactive", "failed", None]}}, "required": ["host", "state_filter"], "additionalProperties": False}, "strict": True},
@@ -120,6 +136,8 @@ TOOLS: list[dict[str, Any]] = [
     {"type": "function", "name": "check_top_processes", "description": "List top CPU and memory consuming processes.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "check_network", "description": "Inspect network interfaces and routes.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "check_docker", "description": "Inspect Docker container status and resource usage.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
+    {"type": "function", "name": "check_system_inventory", "description": "Inspect OS, uptime, reboot, NTP, timers, hardware, disks, and RAID using fixed commands.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
+    {"type": "function", "name": "check_security_inventory", "description": "Inspect firewall, simulated package updates, users, and groups using fixed commands.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "read_log", "description": "Read an allowlisted log path.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}, "logfile": {"type": "string"}, "mode": {"type": "string", "enum": ["head", "tail", "cat"]}, "lines": {"type": "integer", "minimum": 1, "maximum": 500}}, "required": ["host", "logfile", "mode", "lines"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "grep_log", "description": "Search an allowlisted log with a literal bounded pattern.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}, "logfile": {"type": "string"}, "pattern": {"type": "string", "minLength": 1, "maxLength": 256}, "max_lines": {"type": "integer", "minimum": 1, "maximum": 500}}, "required": ["host", "logfile", "pattern", "max_lines"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "who_is_on", "description": "Show active login sessions.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
@@ -257,6 +275,8 @@ class AgentService:
         if name == "check_top_processes": return tuple(await self.executor.check_top_processes(host))
         if name == "check_network": return tuple(await self.executor.check_network(host))
         if name == "check_docker": return tuple(await self.executor.check_docker(host))
+        if name == "check_system_inventory": return tuple(await self.executor.check_system_inventory(host))
+        if name == "check_security_inventory": return tuple(await self.executor.check_security_inventory(host))
         if name == "read_log": return (await self.executor.read_log(host, str(args["logfile"]), str(args["mode"]), int(args["lines"])),)
         if name == "grep_log": return (await self.executor.grep_log(host, str(args["logfile"]), str(args["pattern"]), int(args["max_lines"])),)
         if name == "who_is_on": return tuple(await self.executor.who_is_on(host))
@@ -269,9 +289,29 @@ def create_app(
     onboarding: HostOnboardingService | None = None,
     auth: AuthStore | None = None,
     remediation: RemediationService | None = None,
+    backups: BackupService | None = None,
 ) -> FastAPI:
     auth = auth or AuthStore(audit.path)
     app = FastAPI(title="Sentinel Ops local agent", docs_url=None, redoc_url=None)
+    fleet = FleetHealthService(service.executor, store=FleetSnapshotStore(audit.path))
+
+    async def scheduled_fleet_snapshots() -> None:
+        while True:
+            await asyncio.sleep(300)
+            try:
+                await fleet.snapshot(service.hosts)
+            except Exception as error:  # noqa: BLE001 - the next scheduled run must survive
+                app.state.last_fleet_scheduler_error = type(error).__name__
+
+    @app.on_event("startup")
+    async def start_fleet_scheduler() -> None:
+        app.state.fleet_scheduler = asyncio.create_task(scheduled_fleet_snapshots())
+
+    @app.on_event("shutdown")
+    async def stop_fleet_scheduler() -> None:
+        task = getattr(app.state, "fleet_scheduler", None)
+        if task is not None:
+            task.cancel()
 
     @app.middleware("http")
     async def require_auth(request: Request, call_next):
@@ -351,7 +391,8 @@ def create_app(
     async def hosts() -> list[dict[str, Any]]:
         return [{"name": item.name, "hostname": item.hostname,
                  "allowed_logs": sorted(map(str, item.allowed_logs)),
-                 "restart_services": sorted(item.restart_services)}
+                 "restart_services": sorted(item.restart_services),
+                 "backup_jobs": sorted(item.backup_jobs)}
                 for item in service.hosts.values()]
 
     @app.get("/api/providers")
@@ -364,7 +405,19 @@ def create_app(
 
     @app.get("/api/fleet/health")
     async def fleet_health() -> list[dict[str, Any]]:
-        return await FleetHealthService(service.executor).snapshot(service.hosts)
+        return await fleet.snapshot(service.hosts)
+
+    @app.get("/api/fleet/hosts/{host_name}")
+    async def fleet_host(host_name: str, limit: int = 100) -> dict[str, object]:
+        try:
+            host = service.hosts[host_name]
+        except KeyError as error:
+            raise HTTPException(404, "Unknown or unapproved host") from error
+        history = fleet.store.history(host_name, limit) if fleet.store else []
+        return {"name": host.name, "hostname": host.hostname,
+                "thresholds": {"cpu_percent": host.thresholds.cpu_percent,
+                               "memory_percent": host.thresholds.memory_percent,
+                               "disk_percent": 90.0}, "history": history}
 
     @app.get("/api/playbooks")
     async def list_playbooks() -> list[dict[str, Any]]:
@@ -420,6 +473,40 @@ def create_app(
         except RemediationDenied as error:
             raise HTTPException(400, str(error)) from error
 
+    @app.get("/api/backups/jobs")
+    async def backup_jobs(request: Request) -> list[dict[str, object]]:
+        if request.state.auth_session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        return [] if backups is None else backups.jobs()
+
+    @app.post("/api/backups/preview")
+    async def backup_preview(body: BackupPreviewRequest, request: Request) -> dict[str, object]:
+        session = request.state.auth_session
+        if session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        if backups is None:
+            raise HTTPException(503, "Database backups are unavailable")
+        if not auth.verify_password(session.username, body.password):
+            raise HTTPException(401, "Password reauthentication failed")
+        try:
+            return backups.preview(session.username, session.session_id, body.host, body.job)
+        except BackupDenied as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/backups/execute")
+    async def backup_execute(body: BackupExecuteRequest, request: Request) -> dict[str, object]:
+        session = request.state.auth_session
+        if session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        if backups is None:
+            raise HTTPException(503, "Database backups are unavailable")
+        try:
+            return await backups.execute(
+                body.approval_token, session.username, session.session_id
+            )
+        except BackupDenied as error:
+            raise HTTPException(400, str(error)) from error
+
     @app.post("/api/hosts/discover-key")
     async def discover_host_key(body: VMOnboardingRequest, request: Request) -> dict[str, object]:
         if request.state.auth_session.role != "administrator":
@@ -447,6 +534,8 @@ def create_app(
         service.executor.replace_hosts(service.hosts)
         if remediation is not None:
             remediation.replace_hosts(service.hosts)
+        if backups is not None:
+            backups.replace_hosts(service.hosts)
         return {
             "trusted": True,
             "host": {
@@ -454,6 +543,7 @@ def create_app(
                 "hostname": host.hostname,
                 "allowed_logs": sorted(map(str, host.allowed_logs)),
                 "restart_services": sorted(host.restart_services),
+                "backup_jobs": sorted(host.backup_jobs),
             },
         }
 
@@ -471,6 +561,8 @@ def create_app(
         service.executor.replace_hosts(service.hosts)
         if remediation is not None:
             remediation.replace_hosts(service.hosts)
+        if backups is not None:
+            backups.replace_hosts(service.hosts)
         return {"removed": True, "name": host.name}
 
     @app.get("/api/audit")
@@ -528,14 +620,16 @@ def build_app(config_path: Path, audit_path: Path, model: str | None = None) -> 
     load_dotenv()
     hosts = load_hosts(config_path)
     audit = SQLiteAuditLog(audit_path)
-    transport = AsyncSSHTransport()
+    vault = CredentialVault(audit_path, Path("data/credentials.key"))
+    transport = AsyncSSHTransport(password_provider=lambda host: vault.get(host.name))
     executor = ReadOnlyExecutor(hosts, transport, audit, session_id=str(uuid4()))
     return create_app(
         AgentService(hosts, executor, model=model, chat_store=SQLiteChatStore(audit_path)),
         audit,
-        HostOnboardingService(config_path, Path("data/known_hosts")),
+        HostOnboardingService(config_path, Path("data/known_hosts"), vault),
         AuthStore(audit_path),
         RemediationService(hosts, transport, audit),
+        BackupService(hosts, transport, audit),
     )
 
 

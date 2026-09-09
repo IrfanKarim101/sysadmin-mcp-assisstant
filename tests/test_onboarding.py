@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from sysadmin_mcp.config import load_hosts
+from sysadmin_mcp.credential_vault import CredentialVault
 from sysadmin_mcp.onboarding import HostOnboardingService, VMOnboardingRequest
 
 
@@ -117,3 +118,19 @@ async def test_remove_rejects_unknown_host_without_changing_config(tmp_path: Pat
     with pytest.raises(ValueError, match="does not exist"):
         await service.remove("missing")
     assert config.read_bytes() == before
+
+
+@pytest.mark.asyncio
+async def test_direct_password_is_saved_only_in_encrypted_vault(tmp_path: Path):
+    config, known = tmp_path / "hosts.toml", tmp_path / "known_hosts"
+    vault = CredentialVault(tmp_path / "vault.db", tmp_path / "vault.key")
+    service = HostOnboardingService(config, known, vault)
+    values = request().model_dump()
+    values.update({"password_env": None, "password": "vm-secret-password"})
+    direct = VMOnboardingRequest.model_validate(values)
+    with patch("sysadmin_mcp.onboarding.asyncssh.get_server_host_key",
+               AsyncMock(side_effect=[FakeKey(), FakeKey()])):
+        found = await service.discover(direct)
+        await service.decide(found["token"], True)
+    assert vault.get("web-02") == "vm-secret-password"
+    assert "vm-secret-password" not in config.read_text()
