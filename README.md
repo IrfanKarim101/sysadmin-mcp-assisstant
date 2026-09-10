@@ -1,4 +1,4 @@
-# SysAdmin MCP Assistant
+# Evesdropctl
 
 A security-first MCP service for **read-only** diagnostics on approved Linux
 hosts over SSH. The complete design and delivery plan are in
@@ -16,11 +16,13 @@ searchable **History** views plus explicit sign-out.
 
 ## Current status
 
-Phase 1's executor policy is implemented. `ReadOnlyCommandPolicy` builds a
+Phase 1's executor policy and typed MCP adapter are implemented. `ReadOnlyCommandPolicy` builds a
 small, fixed set of argument vectors for ports, services, resource snapshots,
 allowlisted log reads/searches, and active users. `ReadOnlyExecutor` applies
 uniform output bounds, while the AsyncSSH implementation remains isolated in
-the transport module. MCP tools are not implemented yet.
+the transport module. The local operator UI adds fleet views, investigation
+playbooks, security posture, encrypted VM credential storage, conversation
+history, and approval-gated service restart and database-backup jobs.
 
 Phase 2's deployable OS hardening is available in [`hardening/`](hardening/).
 It uses an OpenSSH forced-command gate with fixed absolute executables, a
@@ -89,17 +91,37 @@ cd ui
 npm run dev
 ```
 
-Open `http://localhost:3000`. The provider switch supports OpenAI and Gemini;
-Anthropic is intentionally visible but disabled until its adapter is implemented.
+Open `http://localhost:3000`, or `http://<this-PC-LAN-IP>:3000` from another
+device on the same private network. Both development services listen on all
+interfaces; the browser automatically targets port 8765 on the same host used
+for the UI. Credentialed CORS remains restricted to localhost, RFC1918 private
+addresses, and exact origins optionally listed in `AGENT_ALLOWED_ORIGINS`.
+Use HTTPS and set `AUTH_COOKIE_SECURE=true` before exposing this beyond a trusted
+test LAN. The provider switch supports ChatGPT, Gemini, and an OpenAI-compatible
+local LLM server configured with `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`, and an
+optional `LOCAL_LLM_API_KEY`.
 
 ### Add VMs from the UI
 
-Select **Add VM**, enter an alias, hostname/IP, SSH port, username, credential
-environment-variable name, and exact allowed log paths. The first connection
+Select **VM management**, enter an alias, hostname/IP, SSH port, username,
+password, and exact allowed log paths. The password is encrypted locally with
+AES-256-GCM and is never written to host configuration, logs, browser storage,
+or chat history. The first connection
 shows the SSH key algorithm and SHA-256 fingerprint. Verify it through the VM
 console or a trusted administrator, then choose **Yes, trust key** or
 **No, cancel**. Acceptance rechecks the key before atomically updating
-`data/known_hosts` and `config/hosts.toml`; passwords are never entered in the UI.
+`data/known_hosts` and `config/hosts.toml`.
+
+### Database backup jobs
+
+The **Database backups** page runs only typed job IDs enabled for a host.
+The browser cannot submit commands, script paths, or arguments. The VM's
+root-owned policy maps an ID such as `database-dump` to an exact executable
+such as `/root/database-dump.sh`. Runs require Administrator access, password
+reauthentication, an explicit confirmation, and a session-bound one-use
+approval. Results are bounded and recorded in the SQLite audit history.
+
+See [`hardening/README.md`](hardening/README.md) for host-side installation.
 
 Copy `config/hosts.example.toml` to `config/hosts.toml` only after the test
 host is prepared. `config/hosts.toml`, private keys, and SQLite files are

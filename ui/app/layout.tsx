@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
+import { AuthGate } from '@/components/auth-gate';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -13,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Sentinel Ops — Sysadmin MCP Agent',
+  title: 'Evesdropctl — Sysadmin MCP Agent',
   description: 'A live read-only operator console for Linux diagnostics.',
 };
 
@@ -27,7 +28,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
+        <AuthGate>{children}</AuthGate>
       </body>
     </html>
   );

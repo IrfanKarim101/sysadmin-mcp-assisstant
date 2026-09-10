@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     host TEXT NOT NULL,
-    provider TEXT NOT NULL CHECK (provider IN ('openai', 'gemini'))
+    provider TEXT NOT NULL CHECK (provider IN ('openai', 'gemini', 'local'))
 );
 CREATE TABLE IF NOT EXISTS chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,7 +48,45 @@ class SQLiteChatStore:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
+            self._migrate_provider_constraint(connection)
             connection.executescript(CHAT_SCHEMA)
+
+    @staticmethod
+    def _migrate_provider_constraint(connection: sqlite3.Connection) -> None:
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='chat_sessions'"
+        ).fetchone()
+        if row is None or "'local'" in str(row[0]):
+            return
+        # SQLite cannot alter a CHECK constraint, so preserve data while rebuilding.
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.executescript(
+            """
+            ALTER TABLE chat_messages RENAME TO chat_messages_legacy;
+            ALTER TABLE chat_sessions RENAME TO chat_sessions_legacy;
+            CREATE TABLE chat_sessions (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                host TEXT NOT NULL,
+                provider TEXT NOT NULL CHECK (provider IN ('openai', 'gemini', 'local'))
+            );
+            CREATE TABLE chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL REFERENCES chat_sessions(id),
+                created_at TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                content TEXT NOT NULL,
+                metadata TEXT NOT NULL DEFAULT '{}'
+            );
+            INSERT INTO chat_sessions SELECT * FROM chat_sessions_legacy;
+            INSERT INTO chat_messages SELECT * FROM chat_messages_legacy;
+            DROP TABLE chat_messages_legacy;
+            DROP TABLE chat_sessions_legacy;
+            CREATE INDEX chat_messages_session_id ON chat_messages(session_id, id);
+            """
+        )
+        connection.execute("PRAGMA foreign_keys = ON")
 
     def ensure_session(self, session_id: str, host: str, provider: str) -> None:
         _validate_session_id(session_id)
@@ -113,6 +151,24 @@ class SQLiteChatStore:
                 (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id=s.id) AS message_count
                 FROM chat_sessions s ORDER BY s.updated_at DESC LIMIT ?""", (limit,)).fetchall()
         return [dict(row) for row in rows]
+
+    def delete_session(self, session_id: str) -> bool:
+        _validate_session_id(session_id)
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM chat_messages WHERE session_id = ?", (session_id,)
+            )
+            cursor = connection.execute(
+                "DELETE FROM chat_sessions WHERE id = ?", (session_id,)
+            )
+        return cursor.rowcount == 1
+
+    def delete_all(self) -> int:
+        with self._connect() as connection:
+            count = int(connection.execute("SELECT COUNT(*) FROM chat_sessions").fetchone()[0])
+            connection.execute("DELETE FROM chat_messages")
+            connection.execute("DELETE FROM chat_sessions")
+        return count
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=5)

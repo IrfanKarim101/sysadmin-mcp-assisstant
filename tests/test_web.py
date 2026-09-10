@@ -9,9 +9,10 @@ from fastapi.testclient import TestClient
 
 from sysadmin_mcp.audit import SQLiteAuditLog
 from sysadmin_mcp.auth import MAX_LOGIN_FAILURES, AuthStore
+from sysadmin_mcp.backups import BackupService
 from sysadmin_mcp.config import ConfigError, HostConfig, validate_host
 from sysadmin_mcp.models import CommandResult
-from sysadmin_mcp.web import AgentService, ChatRequest, create_app
+from sysadmin_mcp.web import AgentService, ChatRequest, _host_discovery_error, create_app
 
 
 def host() -> HostConfig:
@@ -71,6 +72,12 @@ def test_password_environment_name_is_validated():
         validate_host(invalid)
 
 
+def test_host_discovery_errors_distinguish_access_policy_and_unreachable_network():
+    assert "outbound firewall" in _host_discovery_error(PermissionError("access denied"))
+    assert "unreachable" in _host_discovery_error(OSError("private local detail"))
+    assert "private local detail" not in _host_discovery_error(OSError("private local detail"))
+
+
 def test_api_does_not_expose_credentials(tmp_path: Path):
     audit = SQLiteAuditLog(tmp_path / "audit.db")
     service = AgentService({"olaf-ubuntu": host()}, FakeExecutor(), model="test", client=SimpleNamespace(responses=FakeResponses()))
@@ -104,6 +111,21 @@ def test_unauthenticated_response_keeps_cors_headers(tmp_path: Path):
     )
     assert response.status_code == 401
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_private_lan_origin_is_allowed_but_public_origin_is_not(tmp_path: Path):
+    audit = SQLiteAuditLog(tmp_path / "audit.db")
+    service = AgentService(
+        {"olaf-ubuntu": host()}, FakeExecutor(), model="test",
+        client=SimpleNamespace(responses=FakeResponses()),
+    )
+    client = TestClient(create_app(service, audit))
+    lan = client.get("/api/hosts", headers={"origin": "http://192.168.0.25:3000"})
+    assert lan.status_code == 401
+    assert lan.headers["access-control-allow-origin"] == "http://192.168.0.25:3000"
+    public = client.get("/api/hosts", headers={"origin": "http://203.0.113.10:3000"})
+    assert public.status_code == 401
+    assert "access-control-allow-origin" not in public.headers
 
 
 def test_login_throttle_and_session_revocation_require_csrf(tmp_path: Path):
@@ -153,10 +175,74 @@ def test_login_throttle_and_session_revocation_require_csrf(tmp_path: Path):
 
 
 def test_request_rejects_disabled_or_unknown_provider():
+    assert ChatRequest(message="ports", host="olaf-ubuntu", provider="local").provider == "local"
     with pytest.raises(ValueError):
         ChatRequest(message="ports", host="olaf-ubuntu", provider="anthropic")
     with pytest.raises(ValueError):
         ChatRequest(message="ports", host="olaf-ubuntu", provider="openai;gemini")
+
+
+def test_backup_api_requires_authentication_reauthentication_and_fixed_job(tmp_path: Path):
+    audit = SQLiteAuditLog(tmp_path / "audit.db")
+    transport = type(
+        "BackupTransport",
+        (),
+        {"run": lambda self, target, command: asyncio.sleep(
+            0, result=CommandResult(command, "dump completed\n", "", 0)
+        )},
+    )()
+    backup_host = HostConfig(**{
+        **host().__dict__, "backup_jobs": frozenset({"database-dump"})
+    })
+    service = AgentService(
+        {"olaf-ubuntu": backup_host}, FakeExecutor(), model="test",
+        client=SimpleNamespace(responses=FakeResponses()),
+    )
+    client = TestClient(create_app(
+        service, audit, backups=BackupService({"olaf-ubuntu": backup_host}, transport, audit)
+    ))
+    assert client.get("/api/backups/jobs").status_code == 401
+    login = client.post(
+        "/api/auth/login", json={"username": "admin", "password": "admin"}
+    ).json()
+    csrf = {"x-csrf-token": login["csrf_token"]}
+    assert client.post(
+        "/api/auth/change-password",
+        json={"current_password": "admin", "new_password": "a-secure-password"},
+        headers=csrf,
+    ).status_code == 200
+    assert client.get("/api/backups/jobs").json() == [
+        {"host": "olaf-ubuntu", "backup_jobs": ["database-dump"]}
+    ]
+    assert client.post(
+        "/api/backups/preview",
+        json={"host": "olaf-ubuntu", "job": "database-dump", "password": "wrong"},
+        headers=csrf,
+    ).status_code == 401
+    assert client.post(
+        "/api/backups/preview",
+        json={"host": "olaf-ubuntu", "job": "database-dump;id",
+              "password": "a-secure-password"},
+        headers=csrf,
+    ).status_code == 422
+    preview = client.post(
+        "/api/backups/preview",
+        json={"host": "olaf-ubuntu", "job": "database-dump",
+              "password": "a-secure-password"},
+        headers=csrf,
+    ).json()
+    result = client.post(
+        "/api/backups/execute",
+        json={"approval_token": preview["approval_token"]},
+        headers=csrf,
+    )
+    assert result.status_code == 200
+    assert result.json()["verified"] is True
+    assert client.post(
+        "/api/backups/execute",
+        json={"approval_token": preview["approval_token"]},
+        headers=csrf,
+    ).status_code == 400
 
 
 class SlowResponses:

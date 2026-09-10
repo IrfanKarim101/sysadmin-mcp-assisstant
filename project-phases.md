@@ -313,3 +313,6 @@ replayed or widened and the privileged layer exposes no generic executor.
 - [x] Mirror the exact preview/restart argument shapes in the host-side gate;
       deployments still need an independently reviewed least-privilege OS
       authorization for the configured service before live use.
+- [x] Run a named database-backup job mapped by a root-owned host policy to one
+      exact executable beneath `/root`; reject paths, arguments, shell syntax,
+      unknown IDs, replay, and cross-session approval use.

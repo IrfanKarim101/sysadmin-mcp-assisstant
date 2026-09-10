@@ -146,9 +146,9 @@ export default function BackupsPage() {
                 Script paths stay on the VM
               </p>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              The UI sends only a reviewed job ID. The root-owned host policy
-              maps that ID to a fixed script and rejects arbitrary
-                paths, arguments, and shell syntax.
+                The UI sends only a reviewed job ID. The root-owned host policy
+                maps that ID to a fixed script and rejects arbitrary paths,
+                arguments, and shell syntax.
               </p>
             </div>
           </div>
@@ -156,7 +156,7 @@ export default function BackupsPage() {
         {error && (
           <p
             role="alert"
-          className="rounded-xl bg-red-400/10 p-4 text-sm text-red-200"
+            className="rounded-xl bg-red-400/10 p-4 text-sm text-red-200"
           >
             {error}
           </p>
@@ -267,9 +267,21 @@ export default function BackupsPage() {
                 </article>
               )}
               {outcome && (
-                <article className="rounded-2xl border border-emerald-400/25 bg-card p-5">
+                <article
+                  className={
+                    outcome.verified
+                      ? 'rounded-2xl border border-emerald-400/25 bg-card p-5'
+                      : 'rounded-2xl border border-red-400/25 bg-card p-5'
+                  }
+                >
                   <div className="flex items-center gap-2">
-                    <CheckCircle2 className="size-5 text-emerald-300" />
+                    <CheckCircle2
+                      className={
+                        outcome.verified
+                          ? 'size-5 text-emerald-300'
+                          : 'size-5 text-red-300'
+                      }
+                    />
                     <h2 className="font-medium">
                       {outcome.verified ? 'Backup completed' : 'Backup failed'}
                     </h2>

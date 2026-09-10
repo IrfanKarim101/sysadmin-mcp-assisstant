@@ -32,7 +32,11 @@ const actions = [
   ['Failed services', 'Show failed services', Activity],
   ['Resources', 'Check CPU and memory usage', Database],
   ['Disk & inodes', 'Check disk space and inode usage', Server],
-  ['Top processes', 'Show the top CPU and memory consuming processes', Activity],
+  [
+    'Top processes',
+    'Show the top CPU and memory consuming processes',
+    Activity,
+  ],
   ['Network', 'Inspect network interfaces and routes', Network],
   ['Docker', 'Check Docker container status and resource usage', Database],
   ['Active users', 'Who is logged in?', Users],
@@ -52,10 +56,12 @@ type Evt = {
   results?: Result[];
   summary?: string;
   session_id?: string;
+  direction?: 'request' | 'response';
+  payload?: unknown;
 };
 type Turn = { role: 'user' | 'agent'; text?: string; events?: Evt[] };
 type SavedMessage = { role: 'user' | 'assistant'; content: string };
-type ProviderId = 'openai' | 'gemini';
+type ProviderId = 'openai' | 'gemini' | 'local';
 type Provider = {
   id: string;
   label: string;
@@ -74,25 +80,26 @@ export default function Home() {
   const [sessionId, setSessionId] = useState('');
   useEffect(() => {
     const storedSession =
-      window.localStorage.getItem('sentinel-session-id') ?? crypto.randomUUID();
+      window.localStorage.getItem('sentinel-session-id') ?? createSessionId();
     window.localStorage.setItem('sentinel-session-id', storedSession);
     setSessionId(storedSession);
-    apiFetch('/api/auth/me').then(async (auth) => {
-      if (!auth.ok) throw new Error('Authentication required');
-      const identity = await auth.json() as {csrf_token:string};
-      sessionStorage.setItem('sentinel-csrf', identity.csrf_token);
-      return Promise.all([
-        apiFetch('/api/hosts').then(async (r) =>
-          r.ok ? await r.json() as Host[] : Promise.reject(),
-        ),
-        apiFetch('/api/providers').then(async (r) =>
-          r.ok ? await r.json() as Provider[] : Promise.reject(),
-        ),
-        apiFetch(`/api/chat/sessions/${storedSession}`).then(async (r) =>
-          r.ok ? await r.json() as SavedMessage[] : Promise.reject(),
-        ),
-      ]);
-    })
+    apiFetch('/api/auth/me')
+      .then(async (auth) => {
+        if (!auth.ok) throw new Error('Authentication required');
+        const identity = (await auth.json()) as { csrf_token: string };
+        sessionStorage.setItem('sentinel-csrf', identity.csrf_token);
+        return Promise.all([
+          apiFetch('/api/hosts').then(async (r) =>
+            r.ok ? ((await r.json()) as Host[]) : Promise.reject(),
+          ),
+          apiFetch('/api/providers').then(async (r) =>
+            r.ok ? ((await r.json()) as Provider[]) : Promise.reject(),
+          ),
+          apiFetch(`/api/chat/sessions/${storedSession}`).then(async (r) =>
+            r.ok ? ((await r.json()) as SavedMessage[]) : Promise.reject(),
+          ),
+        ]);
+      })
       .then(([x, p, saved]) => {
         setHosts(x);
         setHost(x[0]?.name ?? '');
@@ -156,6 +163,13 @@ export default function Home() {
               }
               continue;
             }
+            if (item.type === 'llm_debug') {
+              console.debug(
+                `[Evesdropctl Local LLM ${item.direction ?? 'event'}]`,
+                item.payload,
+              );
+              continue;
+            }
             if (item.type === 'done') setRunning(false);
             setTurns((x) => [
               ...x.slice(0, -1),
@@ -187,7 +201,7 @@ export default function Home() {
           </div>
           <div>
             <div className="flex gap-2 text-sm font-semibold">
-              Sentinel Ops{' '}
+              Evesdropctl{' '}
               <Badge className="bg-emerald-500/10 text-[10px] text-emerald-300">
                 READ ONLY
               </Badge>
@@ -309,7 +323,7 @@ export default function Home() {
                 onChange={(e) => setMessage(e.target.value)}
                 placeholder={
                   online
-                    ? 'Ask Sentinel to inspect this host…'
+                    ? 'Ask Evesdropctl to inspect this host…'
                     : 'Start sysadmin-web to connect…'
                 }
                 className="min-h-14 resize-none border-0 bg-transparent"
@@ -337,7 +351,7 @@ export default function Home() {
                   )}
                   {running
                     ? 'Working'
-                    : `Run with ${provider === 'openai' ? 'OpenAI' : 'Gemini'}`}
+                    : `Run with ${providers.find((p) => p.id === provider)?.label ?? provider}`}
                 </Button>
               </div>
             </form>
@@ -381,6 +395,17 @@ export default function Home() {
   );
 }
 
+function createSessionId() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) =>
+    value.toString(16).padStart(2, '0'),
+  ).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function Bubble({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex items-start gap-3">
@@ -401,9 +426,8 @@ function Events({ events }: { events: Evt[] }) {
         Starting…
       </span>
     );
-  const finished = events.some((event) =>
-    ['done', 'error', 'summary'].includes(event.type),
-  );
+  const failed = events.some((event) => event.type === 'error');
+  const completed = events.some((event) => event.type === 'summary');
   return (
     <div className="space-y-3">
       {events.map((e, i) =>
@@ -425,12 +449,16 @@ function Events({ events }: { events: Evt[] }) {
           </div>
         ) : e.type === 'thinking' ? (
           <p key={i} className="flex gap-2 text-muted-foreground">
-            {finished ? (
+            {failed || completed ? (
               <CheckCircle2 className="size-4 text-emerald-300" />
             ) : (
               <LoaderCircle className="size-4 animate-spin" />
             )}
-            {finished ? 'Diagnostic plan completed.' : e.message}
+            {failed
+              ? 'Diagnostic failed.'
+              : completed
+                ? 'Diagnostic completed.'
+                : e.message}
           </p>
         ) : e.type === 'summary' ? (
           <MarkdownReport key={i}>{e.message ?? ''}</MarkdownReport>
@@ -463,7 +491,9 @@ function MarkdownReport({ children }: { children: string }) {
         remarkPlugins={[remarkGfm]}
         components={{
           h1: ({ children }) => (
-            <h2 className="text-base font-semibold text-foreground">{children}</h2>
+            <h2 className="text-base font-semibold text-foreground">
+              {children}
+            </h2>
           ),
           h2: ({ children }) => (
             <h3 className="border-b border-border/70 pb-1 text-sm font-semibold text-foreground">
@@ -471,14 +501,22 @@ function MarkdownReport({ children }: { children: string }) {
             </h3>
           ),
           h3: ({ children }) => (
-            <h4 className="text-sm font-semibold text-emerald-300">{children}</h4>
+            <h4 className="text-sm font-semibold text-emerald-300">
+              {children}
+            </h4>
           ),
           p: ({ children }) => <p>{children}</p>,
-          ul: ({ children }) => <ul className="list-disc space-y-1 pl-5">{children}</ul>,
-          ol: ({ children }) => <ol className="list-decimal space-y-2 pl-5">{children}</ol>,
+          ul: ({ children }) => (
+            <ul className="list-disc space-y-1 pl-5">{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="list-decimal space-y-2 pl-5">{children}</ol>
+          ),
           li: ({ children }) => <li className="pl-1">{children}</li>,
           strong: ({ children }) => (
-            <strong className="font-semibold text-foreground">{children}</strong>
+            <strong className="font-semibold text-foreground">
+              {children}
+            </strong>
           ),
           code: ({ children }) => (
             <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-[11px] text-emerald-200">

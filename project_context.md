@@ -24,8 +24,9 @@ code.
 
 ## 3. Non-Goals
 
-- Not a remediation tool — it does not restart services, kill processes,
-  or modify files.
+- Not a general remediation shell. Post-MVP maintenance is limited to
+  separately reviewed, approval-gated typed actions such as restarting an
+  allowlisted service or running a fixed backup job.
 - Not a general-purpose SSH/shell wrapper — no arbitrary command execution.
 - Not a replacement for a full observability stack (Prometheus/Grafana,
   ELK, etc.) — this is a lightweight, conversational diagnostic layer.

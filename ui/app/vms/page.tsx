@@ -127,8 +127,11 @@ export default function VmsPage() {
         setNotice(`${data.host.name} was added to the managed fleet.`);
       }
     } catch (reason) {
+      setPending(null);
       setError(
-        reason instanceof Error ? reason.message : 'Could not save this VM.',
+        reason instanceof Error
+          ? `${reason.message} Fetch the host key again and verify the new fingerprint before accepting it.`
+          : 'Could not save this VM. Fetch the host key again before accepting it.',
       );
     } finally {
       setBusy(false);
@@ -137,7 +140,7 @@ export default function VmsPage() {
   async function remove(host: Host) {
     if (
       !confirm(
-        `Remove ${host.name} from Sentinel Ops?\n\nThis removes its managed configuration and trusted host-key entry. It does not modify the VM.`,
+        `Remove ${host.name} from Evesdropctl?\n\nThis removes its managed configuration and trusted host-key entry. It does not modify the VM.`,
       )
     )
       return;
@@ -154,7 +157,7 @@ export default function VmsPage() {
       if (!response.ok) throw new Error(data.detail ?? 'Could not remove VM.');
       setHosts((current) => current.filter((item) => item.name !== host.name));
       setNotice(
-        `${host.name} was removed from Sentinel Ops. The VM itself was not changed.`,
+        `${host.name} was removed from Evesdropctl. The VM itself was not changed.`,
       );
     } catch (reason) {
       setError(
@@ -214,7 +217,8 @@ export default function VmsPage() {
                   <p className="text-xs text-muted-foreground">
                     {host.hostname} · {host.allowed_logs.length} approved log{' '}
                     {host.allowed_logs.length === 1 ? 'path' : 'paths'} ·{' '}
-                    {host.backup_jobs.length} backup {host.backup_jobs.length === 1 ? 'job' : 'jobs'}
+                    {host.backup_jobs.length} backup{' '}
+                    {host.backup_jobs.length === 1 ? 'job' : 'jobs'}
                   </p>
                 </div>
                 <Button
@@ -251,7 +255,7 @@ export default function VmsPage() {
             <h2 className="font-medium">Add a VM</h2>
           </div>
           <p className="mt-2 text-xs leading-5 text-muted-foreground">
-            Sentinel reads the SSH host key first. Nothing is trusted until you
+            Evesdropctl reads the SSH host key first. Nothing is trusted until you
             approve the fingerprint.
           </p>
           {pending ? (
@@ -357,8 +361,8 @@ export default function VmsPage() {
                 />
               </Field>
               <p className="text-[11px] leading-5 text-muted-foreground">
-                Encrypted locally before storage. It is never written to host configuration,
-                browser storage, logs, or conversation history.
+                Encrypted locally before storage. It is never written to host
+                configuration, browser storage, logs, or conversation history.
               </p>
               <Field label="Approved backup job IDs — one per line">
                 <Textarea
