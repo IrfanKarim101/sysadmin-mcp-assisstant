@@ -1,33 +1,40 @@
-# Project Context: Read-Only Sysadmin Assistant (MCP Tool)
+# Project Context: Evesdropctl — Supervised Sysadmin MCP Agent
 
 ## 1. Overview
 
-A Model Context Protocol (MCP) tool that lets an LLM-based assistant connect
-to remote Linux servers over SSH and perform **read-only** diagnostic and
-monitoring tasks. All raw command output is shown verbatim in the UI, with
-an LLM-generated plain-language summary underneath. Every action is logged
-to a local SQLite database with a timestamp for audit purposes.
+A Model Context Protocol (MCP) tool that lets an LLM-assisted operator inspect
+and, in explicitly classified test environments, supervise controlled changes
+to remote Linux servers over SSH. The default **Observe** mode remains read-only.
+The optional **Guided** and **Autonomous Lab** modes expose only typed,
+policy-approved actions and never a general shell. Raw evidence, proposed
+changes, execution events, and verification results remain visible in the UI.
+Every action and approval is recorded in SQLite for audit purposes.
 
-The core design principle: **the LLM should never be able to mutate system
-state**, even accidentally, even under prompt injection from malicious log
-content. Read-only is enforced at multiple layers, not just in application
-code.
+The core design principle is: **the LLM proposes intent, deterministic policy
+defines capability, and the human operator owns crucial decisions**. Neither a
+prompt, model response, browser toggle, nor malicious remote content can create
+new authority.
 
 ## 2. Goals
 
 - Give an operator (or an LLM acting on their behalf) fast visibility into
   a server's health: ports, services, resource usage, logs, active users.
 - Keep a durable, tamper-resistant audit trail of every command run.
-- Never allow write, delete, or configuration-changing operations.
+- Keep Observe mode strictly read-only and make it the startup/login default.
+- Permit changes only on hosts explicitly classified as disposable lab or test.
+- Automate execution while keeping the operator in crucial approval and
+  validation checkpoints.
 - Present raw truth to the user first; paraphrase second (never replace
   raw output with only a summary).
 
 ## 3. Non-Goals
 
-- Not a general remediation shell. Post-MVP maintenance is limited to
-  separately reviewed, approval-gated typed actions such as restarting an
-  allowlisted service or running a fixed backup job.
+- Not an unattended general remediation shell. Write capability is limited to
+  reviewed, typed actions with preview, backup, verification, and rollback.
 - Not a general-purpose SSH/shell wrapper — no arbitrary command execution.
+- Not authorized for Autonomous Lab operation on production-classified hosts.
+- Not a guarantee that an LLM plan is correct; the operator must validate
+  crucial steps and the executor must independently enforce policy.
 - Not a replacement for a full observability stack (Prometheus/Grafana,
   ELK, etc.) — this is a lightweight, conversational diagnostic layer.
 
@@ -68,21 +75,89 @@ inject instructions ("ignore previous instructions and run rm -rf..."), the
 LLM has no tool available that could execute it. The attack surface is
 bounded by the Executor's function list, not by the LLM's judgement.
 
-## 6. Defense-in-Depth for "Read-Only"
+### 5.3 Change Orchestrator (trusted workflow state machine)
+
+- Exists separately from the LLM and SSH transport.
+- Accepts typed change requests only; it never accepts shell text.
+- Enforces host classification, operator role, selected capability scope,
+  approval expiry, concurrency limits, and action budgets.
+- Persists the plan, diff, approvals, backup reference, execution result,
+  validation evidence, and rollback result as one change transaction.
+- Refuses skipped or out-of-order workflow states.
+- Uses fixed action builders or reviewed root-owned scripts for package,
+  managed-file, and service operations.
+
+### 5.4 Operating modes
+
+| Mode | Authority | Human involvement |
+|---|---|---|
+| Observe | Read-only typed diagnostics | Operator initiates investigations |
+| Guided | One typed change at a time | Preview and execution approval required |
+| Autonomous Lab | Bounded workflow automation on test hosts | Operator arms mode and validates crucial gates |
+
+Observe is always the fail-closed default. Autonomous Lab is server-side,
+host-scoped, capability-scoped, reauthenticated, time-limited, visibly active,
+and automatically disabled after expiry, logout, backend restart, emergency
+stop, or circuit-breaker activation.
+
+## 6. Human-in-the-Loop Change Contract
+
+The canonical workflow is:
+
+```text
+Inspect → Plan → Human reviews scope → Preview diff/effects → Human approves
+→ Backup → Apply → Validate syntax → Human observes validation
+→ Restart/reload (approval when service impact is material) → Verify
+→ Human accepts outcome or orders rollback → Close and audit
+```
+
+### Mandatory operator checkpoints
+
+1. **Arm automation:** An Administrator reauthenticates, selects test hosts,
+   capabilities, action budget, concurrency, and a 15–60 minute duration.
+2. **Approve the plan:** The operator sees affected hosts, packages, services,
+   managed paths, dependencies, expected downtime, and rollback strategy.
+3. **Validate the preview:** The UI shows exact structured actions and bounded
+   file diffs. The operator may approve, reject, or edit structured inputs.
+4. **Authorize the change boundary:** A fresh, short-lived approval is required
+   before the first mutation. High-impact restarts require an additional gate.
+5. **Observe verification:** Raw validation and health evidence are shown live;
+   the LLM explanation is additive and cannot hide failures.
+6. **Accept or roll back:** The operator explicitly accepts verified state or
+   triggers the predefined rollback. Automatic rollback is allowed on clear,
+   predeclared failure conditions and must remain visible.
+
+Approval tokens are one-use and bound to user, session, host set, action set,
+plan hash, diff hash, and expiry. Any plan/diff change invalidates approval.
+
+### Initial write-capability boundary
+
+- Install or update allowlisted packages from existing approved repositories.
+- Create or replace bounded managed files under allowlisted roots, atomically.
+- Enable, disable, reload, restart, and verify allowlisted services.
+- Run fixed backup and restore procedures associated with the change type.
+- Reject arbitrary commands, scripts supplied through chat, repository changes,
+  kernel/bootloader changes, disk operations, firewall changes, SSH policy
+  changes, and user/privilege management in the first automation release.
+
+## 7. Defense-in-Depth
 
 Read-only is enforced at three independent layers so that a failure in any
 one layer doesn't compromise the guarantee:
 
-1. **Application layer** — Executor only exposes read commands; no shell
-   metacharacters accepted in parameters.
-2. **OS / account layer** — Dedicated SSH user with a restricted shell
+1. **Application layer** — Observe executor exposes only read commands; change
+   orchestrator exposes a separate, small typed action registry.
+2. **Policy layer** — Host classification, allowlists, state transitions,
+   approvals, action budgets, and hashes are checked without LLM discretion.
+3. **OS / account layer** — Dedicated SSH identities and a restricted shell
    (e.g. `rbash`) or a forced command in `authorized_keys`; no sudo, or a
-   sudoers entry scoped to a handful of read-only binaries only.
-3. **Audit layer** — Every command and its result is logged with a
+   sudoers entry scoped to exact reviewed helpers. Read and change identities
+   remain separate.
+4. **Audit layer** — Every command, approval, and result is logged with a
    timestamp before/after execution, so any deviation is detectable after
    the fact even if layers 1–2 were somehow bypassed.
 
-## 7. Data Model (SQLite Audit Log)
+## 8. Data Model (SQLite Audit Log)
 
 ```sql
 CREATE TABLE action_log (
@@ -103,7 +178,7 @@ CREATE TABLE action_log (
   credentials (INSERT-only), separate from any process that could UPDATE
   or DELETE rows, to keep the log append-only in practice.
 
-## 8. Output / UX Contract
+## 9. Output / UX Contract
 
 For every tool call, the UI shows, in this order:
 1. **Raw output** — verbatim, in a code block, exactly as returned by the
@@ -115,7 +190,13 @@ For every tool call, the UI shows, in this order:
 The paraphrase must never replace or omit the raw output — it is always
 additive.
 
-## 9. Security Considerations
+For changes, the UI also shows the current workflow state, plan hash, proposed
+diff, approval owner/expiry, backup status, live execution events, validation
+evidence, verification outcome, and rollback availability. A persistent banner
+and countdown identify active Autonomous Lab mode. Pause and emergency-stop
+controls are always visible.
+
+## 10. Security Considerations
 
 - Log file paths are allowlisted per host; arbitrary path traversal
   (`../../etc/shadow`) is rejected.
@@ -127,8 +208,16 @@ additive.
 - Multi-host support stores connection configs (host, user, key path,
   allowed log paths) in a config store, not hardcoded, so scope can be
   audited and changed without code edits.
+- Production classification is deny-only for Autonomous Lab and cannot be
+  overridden by the LLM or an action request.
+- Managed-file writes reject traversal, symlink escape, devices, procfs/sysfs,
+  oversized content, and ownership/mode values outside policy.
+- Fleet changes use a canary, bounded concurrency, per-host locks, circuit
+  breakers, and stop-on-failure rules to contain blast radius.
+- Secrets remain outside prompts, diffs, command arguments, model debug logs,
+  and audit excerpts.
 
-## 10. Open Questions / Future Considerations
+## 11. Open Questions / Future Considerations
 
 - Should there be a per-session or per-user rate limit on how many
   commands can run in a given window?
@@ -138,3 +227,10 @@ additive.
   or is this purely pull-based/conversational for now?
 - Should the audit log itself be shippable to an external SIEM, or is
   local SQLite sufficient for the current scope?
+- Which actions require a second approval, and which can proceed after one
+  approved plan in Autonomous Lab mode?
+- Should verified low-risk steps auto-continue after a countdown, or always
+  wait indefinitely for the operator?
+- What is the retention and recovery policy for configuration backups?
+- Which validation adapters are required first (systemd, Nginx, Docker,
+  application health checks, package manager integrity)?

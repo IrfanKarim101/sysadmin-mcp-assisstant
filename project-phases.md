@@ -1,4 +1,4 @@
-# Project Phases: Read-Only Sysadmin Assistant (MCP Tool)
+# Project Phases: Evesdropctl Sysadmin MCP Agent
 
 Each phase produces something runnable/testable on its own before moving
 to the next. Security-hardening steps are woven in early rather than
@@ -316,3 +316,179 @@ replayed or widened and the privileged layer exposes no generic executor.
 - [x] Run a named database-backup job mapped by a root-owned host policy to one
       exact executable beneath `/root`; reject paths, arguments, shell syntax,
       unknown IDs, replay, and cross-session approval use.
+
+---
+
+## Phase 15 — Automation Modes & Lab Classification
+
+**Goal:** Introduce authority modes without introducing write commands yet.
+
+- [ ] Add server-side `observe`, `guided`, and `autonomous_lab` modes; never
+      trust a browser-only toggle.
+- [ ] Classify every host as production, staging, development, or disposable
+      lab, with Autonomous Lab denied for production.
+- [ ] Require Administrator reauthentication to arm automation and bind it to
+      selected hosts, capabilities, action budget, concurrency, and expiry.
+- [ ] Add a persistent mode banner, countdown, pause, and emergency stop.
+- [ ] Reset to Observe on expiry, logout, backend restart, policy change,
+      repeated failure, or emergency stop.
+- [ ] Audit mode requests, approvals, denials, activation, expiry, and stop.
+
+**Human checkpoint:** The operator must explicitly select the test hosts and
+capability scope and confirm the time-limited automation session.
+
+**Exit criteria:** UI tampering, stale tokens, role changes, or production hosts
+cannot enable write authority; no actual mutation capability exists yet.
+
+---
+
+## Phase 16 — Change Transactions, Plans & Approval Gates
+
+**Goal:** Build the deterministic workflow state machine before adding writers.
+
+- [ ] Add change transactions with states for inspected, planned, previewed,
+      approved, backed-up, applying, validating, verifying, accepted,
+      rollback-required, rolled-back, failed, and cancelled.
+- [ ] Define typed plans containing exact hosts, action IDs, structured inputs,
+      expected effects, service impact, validation steps, and rollback strategy.
+- [ ] Hash the plan and preview; bind one-use approvals to user, session, host
+      set, hashes, and expiry. Any edit invalidates approval.
+- [ ] Reject skipped, repeated, expired, or out-of-order state transitions.
+- [ ] Stream every transition and decision to the UI and immutable audit trail.
+
+**Human checkpoints:** The operator reviews scope and risk, edits or rejects the
+structured plan, validates the final preview, then authorizes the mutation
+boundary with a fresh approval.
+
+**Exit criteria:** A simulated change can traverse the entire workflow, including
+denial and rollback paths, without executing a remote write.
+
+---
+
+## Phase 17 — Backup, Restore & Rollback Foundation
+
+**Goal:** Make recovery a prerequisite rather than an afterthought.
+
+- [ ] Define typed backup adapters for managed files, package state, and service
+      state using reviewed host-side helpers.
+- [ ] Store backup references, hashes, ownership/mode metadata, and expiry;
+      never place secret material in prompts or audit excerpts.
+- [ ] Implement idempotent predefined rollback actions and post-rollback checks.
+- [ ] Refuse Apply when a required backup is missing, unverifiable, or stale.
+- [ ] Add retention, cleanup, disk-space limits, and recovery testing.
+
+**Human checkpoint:** Before Apply, the operator sees and validates backup status
+and the exact rollback plan. After failure, the operator observes automatic
+rollback or explicitly chooses rollback when the failure is ambiguous.
+
+**Exit criteria:** Simulated and test-host failures restore the captured prior
+state and produce complete verification evidence.
+
+---
+
+## Phase 18 — Managed File Automation
+
+**Goal:** Safely create or replace configuration files on lab hosts.
+
+- [ ] Allow writes only beneath policy-defined roots and named path IDs.
+- [ ] Reject traversal, symlink escape, devices, procfs/sysfs, oversized content,
+      unsupported encoding, and ownership/modes outside policy.
+- [ ] Produce a bounded unified diff and capture the original before approval.
+- [ ] Write to a temporary file, set approved metadata, validate, then atomically
+      rename; never stream model text directly into a shell.
+- [ ] Add configuration-specific validators beginning with Nginx and systemd.
+
+**Human checkpoints:** The operator reviews the full bounded diff and affected
+path before approval, then observes syntax validation before service activation.
+
+**Exit criteria:** Valid changes apply atomically; malicious paths and content
+shapes fail before transport; validation failure restores the original file.
+
+---
+
+## Phase 19 — Package Lifecycle Automation
+
+**Goal:** Install or update allowlisted packages without arbitrary package-manager use.
+
+- [ ] Add typed package name/version inputs and per-host allowlists.
+- [ ] Use existing approved repositories only; deny repository/key addition.
+- [ ] Preview versions, dependencies, removals, download size, disk impact, locks,
+      held packages, and reboot requirements.
+- [ ] Add package-manager-specific fixed builders for supported distributions.
+- [ ] Verify installed version and dependent service health after the change.
+- [ ] Stop fleet rollout after a failed canary or dependency/removal surprise.
+
+**Human checkpoints:** The operator approves the dependency/removal preview and
+observes canary verification before allowing remaining test hosts to continue.
+
+**Exit criteria:** Only allowlisted packages and versions can change, and the
+transaction records before/after state plus rollback limitations.
+
+---
+
+## Phase 20 — Service Configuration & Lifecycle
+
+**Goal:** Connect managed configuration to controlled service activation.
+
+- [ ] Extend the typed service registry for enable, disable, reload, restart,
+      status verification, and service-specific health checks.
+- [ ] Require successful syntax/configuration validation before reload/restart.
+- [ ] Distinguish reload from restart and surface expected downtime.
+- [ ] Verify process state, listening ports, recent bounded logs, and configured
+      application health checks after activation.
+- [ ] Automatically invoke the predefined rollback on clear failure conditions.
+
+**Human checkpoints:** The operator observes validation evidence. Material-impact
+restarts require an additional approval immediately before execution; the
+operator then accepts verified state or orders rollback.
+
+**Exit criteria:** A service cannot be activated with invalid configuration, and
+command success alone is never treated as verified health.
+
+---
+
+## Phase 21 — Supervised Automation UI & Fleet Controls
+
+**Goal:** Make long-running automation understandable and interruptible.
+
+- [ ] Build a change workspace showing Inspect, Plan, Preview, Backup, Apply,
+      Validate, Activate, Verify, and Rollback as live states.
+- [ ] Show raw evidence, structured actions, diffs, approval owner/expiry,
+      progress, per-host state, and rollback availability.
+- [ ] Add approve, reject, edit plan, pause, resume, skip-unstarted-host,
+      rollback, and emergency-stop controls with role checks.
+- [ ] Use canary-first fleet rollout, bounded concurrency, per-host locks,
+      action budgets, timeouts, and circuit breakers.
+- [ ] Never hide failure evidence behind an LLM summary or a completed indicator.
+
+**Human checkpoints:** The operator remains present at every crucial gate and can
+halt the workflow at any time. Low-risk steps may auto-continue only when they
+were included in the exact approved plan.
+
+**Exit criteria:** An operator can watch, validate, pause, approve, and roll back
+a multi-step lab change without losing the raw state of any host.
+
+---
+
+## Phase 22 — Adversarial Validation & Lab Release
+
+**Goal:** Prove the supervised automation boundary before broader testing.
+
+- [ ] Test prompt injection in logs, files, package metadata, model responses,
+      and validation output.
+- [ ] Test path/symlink races, command injection shapes, oversized plans/diffs,
+      approval replay, cross-user/session/host use, stale-plan approval, and
+      state-machine bypass.
+- [ ] Test disconnects and process crashes during backup, apply, validation,
+      restart, verification, and rollback.
+- [ ] Verify production classification is fail-closed at UI, API, policy,
+      transport identity, and host-side helper layers.
+- [ ] Conduct recovery drills and document residual risks and non-rollbackable
+      package operations.
+
+**Human checkpoint:** A named operator signs off on the evidence for each failure
+scenario and explicitly authorizes release to disposable lab hosts.
+
+**Exit criteria:** Written security and recovery reports demonstrate that the LLM
+cannot create authority, crucial steps cannot bypass human validation, and all
+mutations remain typed, bounded, audited, recoverable, and limited to test hosts.
