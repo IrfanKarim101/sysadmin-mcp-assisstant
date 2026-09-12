@@ -98,6 +98,12 @@ def test_api_does_not_expose_credentials(tmp_path: Path):
         "/api/backups/preview", "/api/backups/execute", "/api/authority",
         "/api/authority/arm", "/api/authority/pause", "/api/authority/resume",
         "/api/authority/stop", "/api/authority/emergency-stop", "/api/hosts/classify"
+        , "/api/changes", "/api/changes/{transaction_id}",
+        "/api/managed-files/policies",
+        "/api/packages/policies",
+        "/api/changes/{transaction_id}/preview", "/api/changes/{transaction_id}/approve",
+        "/api/changes/{transaction_id}/simulate", "/api/changes/{transaction_id}/accept",
+        "/api/changes/{transaction_id}/rollback", "/api/changes/{transaction_id}/cancel"
     }
 
 

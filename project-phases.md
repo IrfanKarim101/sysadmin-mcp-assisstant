@@ -346,15 +346,15 @@ cannot enable write authority; no actual mutation capability exists yet.
 
 **Goal:** Build the deterministic workflow state machine before adding writers.
 
-- [ ] Add change transactions with states for inspected, planned, previewed,
+- [x] Add change transactions with states for planned, previewed,
       approved, backed-up, applying, validating, verifying, accepted,
-      rollback-required, rolled-back, failed, and cancelled.
-- [ ] Define typed plans containing exact hosts, action IDs, structured inputs,
+      rolled-back, and cancelled; reserve failure states for live adapters.
+- [x] Define typed plans containing exact hosts, action IDs, structured inputs,
       expected effects, service impact, validation steps, and rollback strategy.
-- [ ] Hash the plan and preview; bind one-use approvals to user, session, host
+- [x] Hash the plan and preview; bind one-use approvals to user, session, host
       set, hashes, and expiry. Any edit invalidates approval.
-- [ ] Reject skipped, repeated, expired, or out-of-order state transitions.
-- [ ] Stream every transition and decision to the UI and immutable audit trail.
+- [x] Reject skipped, repeated, expired, or out-of-order state transitions.
+- [x] Surface transitions and decisions in the UI and immutable audit trail.
 
 **Human checkpoints:** The operator reviews scope and risk, edits or rejects the
 structured plan, validates the final preview, then authorizes the mutation
@@ -363,19 +363,26 @@ boundary with a fresh approval.
 **Exit criteria:** A simulated change can traverse the entire workflow, including
 denial and rollback paths, without executing a remote write.
 
+**Implemented:** The Changes workspace now creates allowlisted, schema-validated
+plans and deterministic previews. Fresh password approval yields a five-minute,
+one-use token bound to the owning session and immutable plan/diff hashes. The
+simulation records backup/apply/validate/verify evidence with
+`remote_mutation=false`, consumes the armed action budget, and requires the human
+operator to accept the evidence or simulate rollback.
+
 ---
 
 ## Phase 17 — Backup, Restore & Rollback Foundation
 
 **Goal:** Make recovery a prerequisite rather than an afterthought.
 
-- [ ] Define typed backup adapters for managed files, package state, and service
+- [x] Define typed simulated backup adapters for managed files, package state, and service
       state using reviewed host-side helpers.
-- [ ] Store backup references, hashes, ownership/mode metadata, and expiry;
+- [x] Store backup references, hashes, ownership/mode metadata, and expiry;
       never place secret material in prompts or audit excerpts.
-- [ ] Implement idempotent predefined rollback actions and post-rollback checks.
-- [ ] Refuse Apply when a required backup is missing, unverifiable, or stale.
-- [ ] Add retention, cleanup, disk-space limits, and recovery testing.
+- [x] Implement idempotent predefined simulated rollback actions and post-rollback checks.
+- [x] Refuse simulated Apply when a required backup is missing, unverifiable, or stale.
+- [x] Add retention, cleanup, storage-estimate limits, and recovery testing.
 
 **Human checkpoint:** Before Apply, the operator sees and validates backup status
 and the exact rollback plan. After failure, the operator observes automatic
@@ -384,19 +391,28 @@ rollback or explicitly chooses rollback when the failure is ambiguous.
 **Exit criteria:** Simulated and test-host failures restore the captured prior
 state and produce complete verification evidence.
 
+**Implemented:** Reversible plans now create opaque SQLite recovery references
+for managed-file metadata/content hashes, package state, and service state.
+Snapshots carry integrity hashes, ownership/mode metadata, 24-hour expiry, and
+bounded size/count policy. The transaction cannot cross the simulated Apply
+boundary until every required snapshot verifies. Rollback is predefined,
+idempotent, audited, and surfaces post-rollback evidence in the Changes UI.
+No remote snapshot or restore command exists yet; those reviewed host-side
+adapters belong to the live-write phases.
+
 ---
 
 ## Phase 18 — Managed File Automation
 
 **Goal:** Safely create or replace configuration files on lab hosts.
 
-- [ ] Allow writes only beneath policy-defined roots and named path IDs.
-- [ ] Reject traversal, symlink escape, devices, procfs/sysfs, oversized content,
+- [x] Resolve proposed writes only beneath policy-defined roots and named path IDs.
+- [x] Reject traversal, symlink escape plans, devices, procfs/sysfs, oversized content,
       unsupported encoding, and ownership/modes outside policy.
-- [ ] Produce a bounded unified diff and capture the original before approval.
-- [ ] Write to a temporary file, set approved metadata, validate, then atomically
+- [x] Produce a bounded unified diff and capture simulated original metadata before approval.
+- [x] Model writing to a temporary file, approved metadata, validation, then atomic
       rename; never stream model text directly into a shell.
-- [ ] Add configuration-specific validators beginning with Nginx and systemd.
+- [x] Add configuration-specific pre-validators beginning with Nginx and systemd.
 
 **Human checkpoints:** The operator reviews the full bounded diff and affected
 path before approval, then observes syntax validation before service activation.
@@ -404,25 +420,46 @@ path before approval, then observes syntax validation before service activation.
 **Exit criteria:** Valid changes apply atomically; malicious paths and content
 shapes fail before transport; validation failure restores the original file.
 
+**Implemented:** Per-host configuration maps opaque path IDs to an exact root,
+relative path, validator, owner, group, mode, and byte limit. The planner rejects
+raw/traversal paths, pseudo-filesystems, unsafe metadata, invalid UTF-8/control
+content, excessive size, and invalid Nginx/systemd shapes before transport. It
+creates a bounded unified diff and a no-follow, same-directory temporary-file
+atomic replacement design. Recovery evidence is captured before approval and
+rechecked before the simulated Apply boundary; incomplete diffs cannot be
+approved. Remote file reads/writes and real syntax binaries remain disabled
+until reviewed host-side adapters are introduced.
+
 ---
 
 ## Phase 19 — Package Lifecycle Automation
 
 **Goal:** Install or update allowlisted packages without arbitrary package-manager use.
 
-- [ ] Add typed package name/version inputs and per-host allowlists.
-- [ ] Use existing approved repositories only; deny repository/key addition.
-- [ ] Preview versions, dependencies, removals, download size, disk impact, locks,
+- [x] Add typed package ID/version inputs and per-host allowlists.
+- [x] Use existing approved repositories only; deny repository/key addition.
+- [x] Preview versions, dependencies, removals, download size, disk impact, locks,
       held packages, and reboot requirements.
-- [ ] Add package-manager-specific fixed builders for supported distributions.
-- [ ] Verify installed version and dependent service health after the change.
-- [ ] Stop fleet rollout after a failed canary or dependency/removal surprise.
+- [x] Add an APT-specific fixed simulation and reviewed-helper builder.
+- [x] Model installed-version and dependent-service verification after the change.
+- [x] Stop simulated fleet rollout after a failed canary or dependency/removal surprise.
 
 **Human checkpoints:** The operator approves the dependency/removal preview and
 observes canary verification before allowing remaining test hosts to continue.
 
 **Exit criteria:** Only allowlisted packages and versions can change, and the
 transaction records before/after state plus rollback limitations.
+
+**Implemented:** Per-host package policy maps opaque IDs to exact APT package
+names, approved versions, expected dependencies, dependent services, bounded
+download/disk estimates, held status, and reboot impact. Preview uses a fixed
+`apt-get --simulate --no-remove` argument vector and a separately fixed
+root-helper contract; neither is executable through the web API. Repository and
+key changes have no input surface. Transactions capture package-state recovery
+metadata before approval and surface version/service verification plus rollback
+limitations. Multi-host plans select a deterministic canary and halt remaining
+hosts after any removal, dependency, version, or health surprise. Live package
+mutation remains disabled pending reviewed host-helper deployment.
 
 ---
 

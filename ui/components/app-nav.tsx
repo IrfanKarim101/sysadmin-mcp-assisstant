@@ -14,6 +14,7 @@ import {
   UserRound,
   Workflow,
   Wrench,
+  GitPullRequestDraft,
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -26,6 +27,7 @@ const links = [
   ['/playbooks', 'Playbooks', Workflow],
   ['/security', 'Security', ShieldCheck],
   ['/remediation', 'Remediation', Wrench],
+  ['/changes', 'Changes', GitPullRequestDraft],
   ['/backups', 'Database backups', DatabaseBackup],
   ['/history', 'History', History],
   ['/account', 'Account', UserRound],
@@ -74,7 +76,7 @@ export function AppNav() {
           <div>
             <p className="text-sm font-semibold">Evesdropctl</p>
             <p className="text-[11px] text-muted-foreground">
-              Read-only control plane
+              Bounded control plane
             </p>
           </div>
           <Button
@@ -117,7 +119,7 @@ export function AppNav() {
             Sign out
           </Button>
           <p className="mt-3 px-3 text-[10px] leading-4 text-muted-foreground">
-            Local access only · Host changes require confirmation.
+            Host changes require scoped authority and confirmation.
           </p>
         </div>
       </aside>

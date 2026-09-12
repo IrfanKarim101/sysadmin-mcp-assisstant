@@ -159,6 +159,7 @@ class HostOnboardingService:
             ),
             restart_services=frozenset(request.restart_services),
             backup_jobs=frozenset(request.backup_jobs),
+            managed_files=(),
             environment=request.environment,
         )
 

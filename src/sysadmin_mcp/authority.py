@@ -29,6 +29,7 @@ class AuthorityState:
     hosts: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
     action_budget: int = 0
+    actions_used: int = 0
     concurrency: int = 0
     armed_at: str | None = None
     expires_at: str | None = None
@@ -98,6 +99,7 @@ class AuthorityService:
                 hosts=tuple(sorted(set(hosts))),
                 capabilities=tuple(sorted(set(capabilities))),
                 action_budget=action_budget,
+                actions_used=0,
                 concurrency=concurrency,
                 armed_at=now.isoformat(),
                 expires_at=(now + timedelta(minutes=duration_minutes)).isoformat(),
@@ -160,6 +162,36 @@ class AuthorityService:
             ):
                 self._reset("automation_environment_became_ineligible")
                 raise AuthorityDenied("Host is no longer eligible for Autonomous Lab")
+
+    def authorize_plan(self, username: str, session_id: str, hosts: Sequence[str],
+                       capabilities: Sequence[str], action_count: int) -> None:
+        with self._lock:
+            self._expire_if_needed()
+            self._require_owner(username, session_id)
+            if self._state.status != "active":
+                raise AuthorityDenied("Authority mode is not active")
+            if not set(hosts) <= set(self._state.hosts):
+                raise AuthorityDenied("Plan includes a host outside the armed scope")
+            if not set(capabilities) <= set(self._state.capabilities):
+                raise AuthorityDenied("Plan includes a capability outside the armed scope")
+            if action_count < 1 or self._state.actions_used + action_count > self._state.action_budget:
+                raise AuthorityDenied("Plan exceeds the remaining authority action budget")
+            if self._state.mode == "autonomous_lab" and any(
+                self._hosts[name].environment not in AUTONOMOUS_ENVIRONMENTS for name in hosts
+            ):
+                raise AuthorityDenied("Plan host is not eligible for Autonomous Lab")
+
+    def consume(self, username: str, session_id: str, action_count: int) -> None:
+        with self._lock:
+            self._expire_if_needed()
+            self._require_owner(username, session_id)
+            if self._state.status != "active":
+                raise AuthorityDenied("Authority mode is not active")
+            if action_count < 1 or self._state.actions_used + action_count > self._state.action_budget:
+                raise AuthorityDenied("Action budget is exhausted")
+            self._state = AuthorityState(**{
+                **asdict(self._state), "actions_used": self._state.actions_used + action_count,
+            })
 
     def _validate_arm(self, mode: str, hosts: Sequence[str], capabilities: Sequence[str],
                       duration: int, budget: int, concurrency: int) -> None:

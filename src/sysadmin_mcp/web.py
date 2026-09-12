@@ -26,17 +26,21 @@ from .authority import AuthorityDenied, AuthorityService, CAPABILITIES
 from .auth import ABSOLUTE_TIMEOUT, SESSION_COOKIE, AuthStore, LoginThrottled
 from .backups import BackupDenied, BackupService
 from .chat_store import MAX_CONTENT_CHARS, SQLiteChatStore
+from .changes import ChangeAction, ChangeDenied, ChangeTransactionService
 from .config import HostConfig, load_hosts
 from .credential_vault import CredentialVault
 from .executor import ReadOnlyExecutor
 from .fleet import FleetHealthService
 from .fleet_store import FleetSnapshotStore
 from .models import CommandResult
+from .managed_files import ManagedFileDenied, ManagedFilePlanner
+from .packages import PackageDenied, PackagePlanner
 from .onboarding import HostOnboardingService, VMOnboardingRequest
 from .playbooks import PlaybookRunner
 from .presentation import DiagnosticPresenter
 from .rate_limit import SlidingWindowRateLimiter
 from .remediation import RemediationDenied, RemediationService
+from .recovery import RecoveryDenied
 from .security_posture import SecurityPostureService
 from .transport import AsyncSSHTransport
 
@@ -148,6 +152,22 @@ class HostClassificationRequest(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
     environment: Literal["production", "staging", "development", "disposable_lab"]
     password: str = Field(min_length=1, max_length=256)
+
+
+class ChangeCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=120)
+    actions: list[ChangeAction] = Field(min_length=1, max_length=50)
+
+
+class ChangeApproveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    password: str = Field(min_length=1, max_length=256)
+
+
+class ChangeSimulateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approval_token: str = Field(min_length=32, max_length=256)
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -364,9 +384,14 @@ def create_app(
     remediation: RemediationService | None = None,
     backups: BackupService | None = None,
     authority: AuthorityService | None = None,
+    changes: ChangeTransactionService | None = None,
 ) -> FastAPI:
     auth = auth or AuthStore(audit.path)
     authority = authority or AuthorityService(service.hosts, audit)
+    changes = changes or ChangeTransactionService(
+        audit.path, authority, audit, managed_files=ManagedFilePlanner(service.hosts),
+        packages=PackagePlanner(service.hosts),
+    )
     fleet = FleetHealthService(service.executor, store=FleetSnapshotStore(audit.path))
 
     async def scheduled_fleet_snapshots() -> None:
@@ -539,6 +564,99 @@ def create_app(
             raise HTTPException(403, "Administrator access required")
         return _authority_view(authority.stop(session.username, session.session_id, emergency=True))
 
+    def change_operator(request: Request):
+        session = request.state.auth_session
+        if session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        return session
+
+    @app.get("/api/changes")
+    async def change_list(request: Request, limit: int = 50) -> list[dict[str, object]]:
+        session = change_operator(request)
+        try:
+            return changes.list(session.username, session.session_id, limit)
+        except ChangeDenied as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.get("/api/managed-files/policies")
+    async def managed_file_policies(request: Request) -> list[dict[str, object]]:
+        change_operator(request)
+        return changes.managed_files.policies() if changes.managed_files else []
+
+    @app.get("/api/packages/policies")
+    async def package_policies(request: Request) -> list[dict[str, object]]:
+        change_operator(request)
+        return changes.packages.policies() if changes.packages else []
+
+    @app.post("/api/changes")
+    async def change_create(body: ChangeCreateRequest, request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        try:
+            return changes.create(session.username, session.session_id, body.title, body.actions)
+        except (ChangeDenied, AuthorityDenied, RecoveryDenied, ManagedFileDenied, PackageDenied) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.get("/api/changes/{transaction_id}")
+    async def change_get(transaction_id: str, request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        try:
+            return changes.get(transaction_id, session.username, session.session_id)
+        except ChangeDenied as error:
+            raise HTTPException(404, str(error)) from error
+
+    @app.post("/api/changes/{transaction_id}/preview")
+    async def change_preview(transaction_id: str, request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        try:
+            return changes.preview(transaction_id, session.username, session.session_id)
+        except (ChangeDenied, ManagedFileDenied, RecoveryDenied, PackageDenied) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/changes/{transaction_id}/approve")
+    async def change_approve(transaction_id: str, body: ChangeApproveRequest,
+                             request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        if not auth.verify_password(session.username, body.password):
+            raise HTTPException(401, "Password reauthentication failed")
+        try:
+            return changes.approve(transaction_id, session.username, session.session_id)
+        except ChangeDenied as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/changes/{transaction_id}/simulate")
+    async def change_simulate(transaction_id: str, body: ChangeSimulateRequest,
+                              request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        try:
+            return changes.simulate(transaction_id, body.approval_token,
+                                    session.username, session.session_id)
+        except (ChangeDenied, AuthorityDenied, RecoveryDenied, ManagedFileDenied, PackageDenied) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/changes/{transaction_id}/accept")
+    async def change_accept(transaction_id: str, request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        try:
+            return changes.accept(transaction_id, session.username, session.session_id)
+        except ChangeDenied as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/changes/{transaction_id}/rollback")
+    async def change_rollback(transaction_id: str, request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        try:
+            return changes.rollback(transaction_id, session.username, session.session_id)
+        except (ChangeDenied, RecoveryDenied) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/changes/{transaction_id}/cancel")
+    async def change_cancel(transaction_id: str, request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        try:
+            return changes.cancel(transaction_id, session.username, session.session_id)
+        except ChangeDenied as error:
+            raise HTTPException(400, str(error)) from error
+
     @app.post("/api/hosts/classify")
     async def classify_host(body: HostClassificationRequest, request: Request) -> dict[str, object]:
         session = request.state.auth_session
@@ -555,6 +673,12 @@ def create_app(
         service.hosts[host.name] = host
         service.executor.replace_hosts(service.hosts)
         authority.replace_hosts(service.hosts)
+        if changes.managed_files is not None:
+            changes.managed_files.replace_hosts(service.hosts)
+        if changes.packages is not None:
+            changes.packages.replace_hosts(service.hosts)
+        if changes.packages is not None:
+            changes.packages.replace_hosts(service.hosts)
         if remediation is not None:
             remediation.replace_hosts(service.hosts)
         if backups is not None:

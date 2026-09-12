@@ -10,7 +10,13 @@ client_keys = ["~/.ssh/sysadmin_readonly"]
 allowed_logs = ["/var/log/auth.log", "/var/log/syslog"]
 # Empty by default. Phase 14 actions must be explicitly named per host.
 restart_services = []
-backup_jobs = []
+managed_files = [
+  { id = "nginx-site", root = "/etc/nginx", relative_path = "conf.d/evesdropctl.conf", validator = "nginx", owner = "root", group = "root", mode = "0644", max_bytes = 32000 }
+]
+package_manager = "apt"
+packages = [
+  { id = "nginx", name = "nginx", allowed_versions = ["1.24.0-1ubuntu1"], dependencies = [], dependent_services = ["nginx.service"], download_bytes = 1000000, disk_bytes = 3000000, reboot_required = false, held = false }
+]
 # Typed job IDs only. The root-owned host policy maps IDs to exact script paths.
 backup_jobs = []
 
