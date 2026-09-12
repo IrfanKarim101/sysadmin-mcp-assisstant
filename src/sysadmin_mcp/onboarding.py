@@ -33,6 +33,10 @@ class VMOnboardingRequest(BaseModel):
     memory_threshold: float = Field(default=90.0, gt=0, le=100)
     restart_services: list[str] = Field(default_factory=list, max_length=10)
     backup_jobs: list[str] = Field(default_factory=list, max_length=10)
+    environment: str = Field(
+        default="production",
+        pattern=r"^(production|staging|development|disposable_lab)$",
+    )
 
     @model_validator(mode="after")
     def credential(self):
@@ -126,6 +130,19 @@ class HostOnboardingService:
                 self.vault.delete(host.name)
             return host
 
+    async def classify(self, name: str, environment: str) -> HostConfig:
+        async with self._lock:
+            hosts = load_hosts(self.config_path)
+            try:
+                current = hosts[name]
+            except KeyError as error:
+                raise ValueError(f"Host {name!r} does not exist") from error
+            updated = HostConfig(**{**current.__dict__, "environment": environment})
+            validate_host(updated)
+            hosts[name] = updated
+            save_hosts(self.config_path, hosts)
+            return updated
+
     def _host_config(self, request: VMOnboardingRequest) -> HostConfig:
         return HostConfig(
             name=request.name,
@@ -142,6 +159,7 @@ class HostOnboardingService:
             ),
             restart_services=frozenset(request.restart_services),
             backup_jobs=frozenset(request.backup_jobs),
+            environment=request.environment,
         )
 
     def _append_known_host(self, host: HostConfig, public_key: bytes) -> None:

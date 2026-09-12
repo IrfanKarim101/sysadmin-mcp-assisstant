@@ -101,6 +101,14 @@ class RemediationService:
         return {"host": target.name, "service": service, "action": _result(action),
                 "after": _result(after), "verified": verified}
 
+    def approval_scope(self, token: str, username: str, session_id: str) -> Approval:
+        approval = self._approvals.get(_digest(token))
+        if approval is None or approval.expires_at < self._clock():
+            raise RemediationDenied("Approval is invalid, expired, or already used")
+        if approval.username != username or approval.session_id != session_id:
+            raise RemediationDenied("Approval does not belong to this authenticated session")
+        return approval
+
     def _authorize(self, host: str, service: str) -> tuple[HostConfig, str]:
         try:
             target = self._hosts[host]

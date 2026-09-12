@@ -22,6 +22,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import SQLiteAuditLog
+from .authority import AuthorityDenied, AuthorityService, CAPABILITIES
 from .auth import ABSOLUTE_TIMEOUT, SESSION_COOKIE, AuthStore, LoginThrottled
 from .backups import BackupDenied, BackupService
 from .chat_store import MAX_CONTENT_CHARS, SQLiteChatStore
@@ -127,6 +128,26 @@ class BackupPreviewRequest(BaseModel):
 class BackupExecuteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     approval_token: str = Field(min_length=32, max_length=256)
+
+
+class AuthorityArmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["guided", "autonomous_lab"]
+    hosts: list[str] = Field(min_length=1, max_length=30)
+    capabilities: list[Literal["backups", "managed_files", "packages", "services"]] = Field(
+        min_length=1, max_length=4
+    )
+    duration_minutes: int = Field(ge=15, le=60)
+    action_budget: int = Field(ge=1, le=50)
+    concurrency: int = Field(ge=1, le=3)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class HostClassificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+    environment: Literal["production", "staging", "development", "disposable_lab"]
+    password: str = Field(min_length=1, max_length=256)
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -342,8 +363,10 @@ def create_app(
     auth: AuthStore | None = None,
     remediation: RemediationService | None = None,
     backups: BackupService | None = None,
+    authority: AuthorityService | None = None,
 ) -> FastAPI:
     auth = auth or AuthStore(audit.path)
+    authority = authority or AuthorityService(service.hosts, audit)
     fleet = FleetHealthService(service.executor, store=FleetSnapshotStore(audit.path))
 
     async def scheduled_fleet_snapshots() -> None:
@@ -425,8 +448,11 @@ def create_app(
 
     @app.post("/api/auth/logout", status_code=204)
     async def logout(request: Request, response: Response) -> Response:
+        session = request.state.auth_session
+        authority.stop_session(session.username, session.session_id)
         auth.logout(request.cookies.get(SESSION_COOKIE))
         response.delete_cookie(SESSION_COOKIE, path="/")
+        response.status_code = 204
         return response
 
     @app.get("/api/auth/sessions")
@@ -437,7 +463,10 @@ def create_app(
     @app.post("/api/auth/sessions/revoke")
     async def revoke_session(body: SessionRevokeRequest, request: Request) -> dict[str, bool]:
         session = request.state.auth_session
-        return {"revoked": auth.revoke_session(session.username, str(body.session_id))}
+        revoked = auth.revoke_session(session.username, str(body.session_id))
+        if revoked:
+            authority.stop_session(session.username, str(body.session_id))
+        return {"revoked": revoked}
 
     @app.get("/api/auth/events")
     async def auth_events(request: Request, limit: int = 50) -> list[dict[str, object]]:
@@ -446,10 +475,91 @@ def create_app(
     @app.get("/api/hosts")
     async def hosts() -> list[dict[str, Any]]:
         return [{"name": item.name, "hostname": item.hostname,
+                 "environment": item.environment,
                  "allowed_logs": sorted(map(str, item.allowed_logs)),
                  "restart_services": sorted(item.restart_services),
                  "backup_jobs": sorted(item.backup_jobs)}
                 for item in service.hosts.values()]
+
+    @app.get("/api/authority")
+    async def authority_status() -> dict[str, object]:
+        return {**_authority_view(authority.current()), "available_capabilities": sorted(CAPABILITIES)}
+
+    @app.post("/api/authority/arm")
+    async def authority_arm(body: AuthorityArmRequest, request: Request) -> dict[str, object]:
+        session = request.state.auth_session
+        if session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        if not auth.verify_password(session.username, body.password):
+            raise HTTPException(401, "Password reauthentication failed")
+        try:
+            return _authority_view(authority.arm(
+                mode=body.mode, username=session.username, session_id=session.session_id,
+                hosts=body.hosts, capabilities=body.capabilities,
+                duration_minutes=body.duration_minutes, action_budget=body.action_budget,
+                concurrency=body.concurrency,
+            ))
+        except AuthorityDenied as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/authority/pause")
+    async def authority_pause(request: Request) -> dict[str, object]:
+        session = request.state.auth_session
+        if session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        try:
+            return _authority_view(authority.pause(session.username, session.session_id))
+        except AuthorityDenied as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/authority/resume")
+    async def authority_resume(request: Request) -> dict[str, object]:
+        session = request.state.auth_session
+        if session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        try:
+            return _authority_view(authority.resume(session.username, session.session_id))
+        except AuthorityDenied as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/authority/stop")
+    async def authority_stop(request: Request) -> dict[str, object]:
+        session = request.state.auth_session
+        if session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        try:
+            return _authority_view(authority.stop(session.username, session.session_id))
+        except AuthorityDenied as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/authority/emergency-stop")
+    async def authority_emergency_stop(request: Request) -> dict[str, object]:
+        session = request.state.auth_session
+        if session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        return _authority_view(authority.stop(session.username, session.session_id, emergency=True))
+
+    @app.post("/api/hosts/classify")
+    async def classify_host(body: HostClassificationRequest, request: Request) -> dict[str, object]:
+        session = request.state.auth_session
+        if session.role != "administrator":
+            raise HTTPException(403, "Administrator access required")
+        if onboarding is None:
+            raise HTTPException(503, "Host onboarding is unavailable")
+        if not auth.verify_password(session.username, body.password):
+            raise HTTPException(401, "Password reauthentication failed")
+        try:
+            host = await onboarding.classify(body.name, body.environment)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+        service.hosts[host.name] = host
+        service.executor.replace_hosts(service.hosts)
+        authority.replace_hosts(service.hosts)
+        if remediation is not None:
+            remediation.replace_hosts(service.hosts)
+        if backups is not None:
+            backups.replace_hosts(service.hosts)
+        return {"name": host.name, "environment": host.environment}
 
     @app.get("/api/providers")
     async def providers() -> list[dict[str, Any]]:
@@ -511,10 +621,11 @@ def create_app(
         if not auth.verify_password(session.username, body.password):
             raise HTTPException(401, "Password reauthentication failed")
         try:
+            authority.authorize(session.username, session.session_id, body.host, "services")
             return await remediation.preview_restart(
                 session.username, session.session_id, body.host, body.service
             )
-        except RemediationDenied as error:
+        except (RemediationDenied, AuthorityDenied) as error:
             raise HTTPException(400, str(error)) from error
 
     @app.post("/api/remediation/restart/execute")
@@ -525,10 +636,14 @@ def create_app(
         if remediation is None:
             raise HTTPException(503, "Remediation is unavailable")
         try:
+            approval = remediation.approval_scope(
+                body.approval_token, session.username, session.session_id
+            )
+            authority.authorize(session.username, session.session_id, approval.host, "services")
             return await remediation.execute_restart(
                 body.approval_token, session.username, session.session_id
             )
-        except RemediationDenied as error:
+        except (RemediationDenied, AuthorityDenied) as error:
             raise HTTPException(400, str(error)) from error
 
     @app.get("/api/backups/jobs")
@@ -547,8 +662,9 @@ def create_app(
         if not auth.verify_password(session.username, body.password):
             raise HTTPException(401, "Password reauthentication failed")
         try:
+            authority.authorize(session.username, session.session_id, body.host, "backups")
             return backups.preview(session.username, session.session_id, body.host, body.job)
-        except BackupDenied as error:
+        except (BackupDenied, AuthorityDenied) as error:
             raise HTTPException(400, str(error)) from error
 
     @app.post("/api/backups/execute")
@@ -559,10 +675,14 @@ def create_app(
         if backups is None:
             raise HTTPException(503, "Database backups are unavailable")
         try:
+            approval = backups.approval_scope(
+                body.approval_token, session.username, session.session_id
+            )
+            authority.authorize(session.username, session.session_id, approval.host, "backups")
             return await backups.execute(
                 body.approval_token, session.username, session.session_id
             )
-        except BackupDenied as error:
+        except (BackupDenied, AuthorityDenied) as error:
             raise HTTPException(400, str(error)) from error
 
     @app.post("/api/hosts/discover-key")
@@ -590,6 +710,7 @@ def create_app(
             return {"trusted": False}
         service.hosts[host.name] = host
         service.executor.replace_hosts(service.hosts)
+        authority.replace_hosts(service.hosts)
         if remediation is not None:
             remediation.replace_hosts(service.hosts)
         if backups is not None:
@@ -599,6 +720,7 @@ def create_app(
             "host": {
                 "name": host.name,
                 "hostname": host.hostname,
+                "environment": host.environment,
                 "allowed_logs": sorted(map(str, host.allowed_logs)),
                 "restart_services": sorted(host.restart_services),
                 "backup_jobs": sorted(host.backup_jobs),
@@ -617,6 +739,7 @@ def create_app(
             raise HTTPException(400, str(error)) from error
         service.hosts.pop(host.name, None)
         service.executor.replace_hosts(service.hosts)
+        authority.replace_hosts(service.hosts)
         if remediation is not None:
             remediation.replace_hosts(service.hosts)
         if backups is not None:
@@ -680,6 +803,10 @@ def create_app(
 
 def _result_dict(result: CommandResult) -> dict[str, Any]:
     return {"command": list(result.command), "stdout": result.stdout, "stderr": result.stderr, "exit_status": result.exit_status, "truncated": result.truncated}
+
+
+def _authority_view(state: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in state.items() if key != "session_id"}
 
 
 def _event(kind: str, **values: Any) -> str:

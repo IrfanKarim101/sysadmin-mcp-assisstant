@@ -91,6 +91,14 @@ class BackupService:
         return {"host": target.name, "job": job, "result": _result(result),
                 "verified": result.exit_status == 0}
 
+    def approval_scope(self, token: str, username: str, session_id: str) -> BackupApproval:
+        approval = self._approvals.get(_digest(token))
+        if approval is None or approval.expires_at < self._clock():
+            raise BackupDenied("Approval is invalid, expired, or already used")
+        if approval.username != username or approval.session_id != session_id:
+            raise BackupDenied("Approval does not belong to this authenticated session")
+        return approval
+
     def _authorize(self, host: str, job: str) -> tuple[HostConfig, str]:
         try:
             target = self._hosts[host]

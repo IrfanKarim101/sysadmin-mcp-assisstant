@@ -100,6 +100,7 @@ def test_save_hosts_round_trips_atomically(tmp_path: Path) -> None:
         {"client_keys": ()},
         {"allowed_logs": frozenset()},
         {"thresholds": ResourceThresholds(101, 90)},
+        {"environment": "prod;rm"},
     ],
 )
 def test_save_rejects_malformed_or_incomplete_hosts(tmp_path: Path, changes) -> None:

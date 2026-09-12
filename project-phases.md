@@ -323,16 +323,16 @@ replayed or widened and the privileged layer exposes no generic executor.
 
 **Goal:** Introduce authority modes without introducing write commands yet.
 
-- [ ] Add server-side `observe`, `guided`, and `autonomous_lab` modes; never
+- [x] Add server-side `observe`, `guided`, and `autonomous_lab` modes; never
       trust a browser-only toggle.
-- [ ] Classify every host as production, staging, development, or disposable
+- [x] Classify every host as production, staging, development, or disposable
       lab, with Autonomous Lab denied for production.
-- [ ] Require Administrator reauthentication to arm automation and bind it to
+- [x] Require Administrator reauthentication to arm automation and bind it to
       selected hosts, capabilities, action budget, concurrency, and expiry.
-- [ ] Add a persistent mode banner, countdown, pause, and emergency stop.
-- [ ] Reset to Observe on expiry, logout, backend restart, policy change,
+- [x] Add a persistent mode banner, countdown, pause, and emergency stop.
+- [x] Reset to Observe on expiry, logout, backend restart, policy change,
       repeated failure, or emergency stop.
-- [ ] Audit mode requests, approvals, denials, activation, expiry, and stop.
+- [x] Audit mode requests, approvals, denials, activation, expiry, and stop.
 
 **Human checkpoint:** The operator must explicitly select the test hosts and
 capability scope and confirm the time-limited automation session.

@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sysadmin_mcp.audit import SQLiteAuditLog
+from sysadmin_mcp.authority import AuthorityService
 from sysadmin_mcp.auth import MAX_LOGIN_FAILURES, AuthStore
 from sysadmin_mcp.backups import BackupService
 from sysadmin_mcp.config import ConfigError, HostConfig, validate_host
@@ -94,7 +95,9 @@ def test_api_does_not_expose_credentials(tmp_path: Path):
         "/api/security/posture"
         , "/api/remediation/actions", "/api/remediation/restart/preview",
         "/api/remediation/restart/execute", "/api/backups/jobs",
-        "/api/backups/preview", "/api/backups/execute"
+        "/api/backups/preview", "/api/backups/execute", "/api/authority",
+        "/api/authority/arm", "/api/authority/pause", "/api/authority/resume",
+        "/api/authority/stop", "/api/authority/emergency-stop", "/api/hosts/classify"
     }
 
 
@@ -182,6 +185,39 @@ def test_request_rejects_disabled_or_unknown_provider():
         ChatRequest(message="ports", host="olaf-ubuntu", provider="openai;gemini")
 
 
+def test_authority_api_requires_reauthentication_csrf_and_resets_on_logout(tmp_path: Path):
+    audit = SQLiteAuditLog(tmp_path / "audit.db")
+    managed_host = HostConfig(**{**host().__dict__, "environment": "development"})
+    service = AgentService(
+        {managed_host.name: managed_host}, FakeExecutor(), model="test",
+        client=SimpleNamespace(responses=FakeResponses()),
+    )
+    authority = AuthorityService(service.hosts, audit)
+    client = TestClient(create_app(service, audit, authority=authority))
+    body = {
+        "mode": "autonomous_lab", "hosts": [managed_host.name],
+        "capabilities": ["services"], "duration_minutes": 15,
+        "action_budget": 2, "concurrency": 1, "password": "a-secure-password",
+    }
+    assert client.post("/api/authority/arm", json=body).status_code == 401
+    login = client.post(
+        "/api/auth/login", json={"username": "admin", "password": "admin"}
+    ).json()
+    csrf = {"x-csrf-token": login["csrf_token"]}
+    assert client.post(
+        "/api/auth/change-password",
+        json={"current_password": "admin", "new_password": "a-secure-password"},
+        headers=csrf,
+    ).status_code == 200
+    assert client.post("/api/authority/arm", json=body).status_code == 403
+    assert client.post("/api/authority/arm", json=body, headers=csrf).status_code == 200
+    visible = client.get("/api/authority").json()
+    assert visible["mode"] == "autonomous_lab" and "session_id" not in visible
+    assert client.post("/api/authority/pause", headers=csrf).json()["status"] == "paused"
+    assert client.post("/api/auth/logout", headers=csrf).status_code == 204
+    assert authority.current()["mode"] == "observe"
+
+
 def test_backup_api_requires_authentication_reauthentication_and_fixed_job(tmp_path: Path):
     audit = SQLiteAuditLog(tmp_path / "audit.db")
     transport = type(
@@ -214,6 +250,15 @@ def test_backup_api_requires_authentication_reauthentication_and_fixed_job(tmp_p
     assert client.get("/api/backups/jobs").json() == [
         {"host": "olaf-ubuntu", "backup_jobs": ["database-dump"]}
     ]
+    armed = client.post(
+        "/api/authority/arm",
+        json={"mode": "guided", "hosts": ["olaf-ubuntu"],
+              "capabilities": ["backups"], "duration_minutes": 15,
+              "action_budget": 2, "concurrency": 1,
+              "password": "a-secure-password"},
+        headers=csrf,
+    )
+    assert armed.status_code == 200
     assert client.post(
         "/api/backups/preview",
         json={"host": "olaf-ubuntu", "job": "database-dump", "password": "wrong"},

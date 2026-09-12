@@ -23,6 +23,7 @@ type Host = {
   allowed_logs: string[];
   restart_services: string[];
   backup_jobs: string[];
+  environment: 'production' | 'staging' | 'development' | 'disposable_lab';
 };
 type Pending = {
   token: string;
@@ -40,6 +41,7 @@ const initial = {
   allowed_logs: '/var/log/syslog\n/var/log/auth.log',
   restart_services: '',
   backup_jobs: 'database-dump',
+  environment: 'production',
 };
 
 export default function VmsPage() {
@@ -50,6 +52,9 @@ export default function VmsPage() {
     [removing, setRemoving] = useState(''),
     [error, setError] = useState(''),
     [notice, setNotice] = useState('');
+  const [classification, setClassification] = useState<{
+    host: Host; environment: Host['environment']; password: string;
+  } | null>(null);
   async function load() {
     const me = await apiFetch('/api/auth/me');
     if (!me.ok) return;
@@ -167,6 +172,29 @@ export default function VmsPage() {
       setRemoving('');
     }
   }
+  async function classify(event: FormEvent) {
+    event.preventDefault();
+    if (!classification) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const response = await apiFetch('/api/hosts/classify', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: classification.host.name,
+          environment: classification.environment,
+          password: classification.password,
+        }),
+      });
+      const data = await response.json() as { detail?: string };
+      if (!response.ok) throw new Error(data.detail ?? 'Could not classify VM.');
+      setHosts((current) => current.map((item) => item.name === classification.host.name
+        ? { ...item, environment: classification.environment } : item));
+      setNotice(`${classification.host.name} is now classified as ${classification.environment.replace('_', ' ')}.`);
+      setClassification(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not classify VM.');
+    } finally { setBusy(false); }
+  }
   return (
     <main className="min-h-screen bg-background text-foreground">
       <header className="flex min-h-16 items-center justify-between border-b px-6 py-3">
@@ -221,6 +249,9 @@ export default function VmsPage() {
                     {host.backup_jobs.length === 1 ? 'job' : 'jobs'}
                   </p>
                 </div>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setClassification({ host, environment: host.environment, password: '' })}>
+                  <Badge variant="outline">{host.environment.replace('_', ' ')}</Badge>
+                </Button>
                 <Button
                   type="button"
                   variant="outline"
@@ -360,6 +391,14 @@ export default function VmsPage() {
                   placeholder="Enter the VM account password"
                 />
               </Field>
+              <Field label="Environment classification">
+                <select className="h-9 rounded-lg border bg-background px-3" value={form.environment} onChange={(e) => update('environment', e.target.value)}>
+                  <option value="production">Production</option>
+                  <option value="staging">Staging</option>
+                  <option value="development">Development</option>
+                  <option value="disposable_lab">Disposable lab</option>
+                </select>
+              </Field>
               <p className="text-[11px] leading-5 text-muted-foreground">
                 Encrypted locally before storage. It is never written to host
                 configuration, browser storage, logs, or conversation history.
@@ -388,6 +427,15 @@ export default function VmsPage() {
           )}
         </aside>
       </section>
+      {classification && <div className="fixed inset-0 z-[80] grid place-items-center bg-black/70 p-4" role="dialog" aria-modal="true">
+        <form onSubmit={classify} className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-2xl">
+          <h2 className="font-semibold">Classify {classification.host.name}</h2>
+          <p className="mt-2 text-sm text-muted-foreground">Autonomous Lab is denied unless this host is development or disposable lab. Choose based on the VM's actual purpose.</p>
+          <Field label="Environment"><select className="h-9 rounded-lg border bg-background px-3" value={classification.environment} onChange={(e) => setClassification({ ...classification, environment: e.target.value as Host['environment'] })}><option value="production">Production</option><option value="staging">Staging</option><option value="development">Development</option><option value="disposable_lab">Disposable lab</option></select></Field>
+          <div className="mt-4"><Field label="Administrator password"><Input required type="password" autoComplete="current-password" value={classification.password} onChange={(e) => setClassification({ ...classification, password: e.target.value })} /></Field></div>
+          <div className="mt-5 flex justify-end gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => setClassification(null)}>Cancel</Button><Button type="submit" disabled={busy}>{busy && <LoaderCircle className="animate-spin" />}Save classification</Button></div>
+        </form>
+      </div>}
     </main>
   );
 }

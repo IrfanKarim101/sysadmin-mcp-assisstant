@@ -17,6 +17,7 @@ HOST_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 USERNAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,31}\Z")
 SERVICE_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}(?:\.service)?\Z")
 BACKUP_JOB_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
+ENVIRONMENTS = frozenset({"production", "staging", "development", "disposable_lab"})
 
 
 class ConfigError(ValueError):
@@ -46,6 +47,7 @@ class HostConfig:
     thresholds: ResourceThresholds = ResourceThresholds()
     restart_services: frozenset[str] = frozenset()
     backup_jobs: frozenset[str] = frozenset()
+    environment: str = "production"
 
 
 def load_hosts(path: Path) -> dict[str, HostConfig]:
@@ -94,6 +96,7 @@ def load_hosts(path: Path) -> dict[str, HostConfig]:
                 backup_jobs=frozenset(
                     _string_list(values.get("backup_jobs", []), "backup_jobs", allow_empty=True)
                 ),
+                environment=values.get("environment", "production"),
             )
         except (KeyError, TypeError) as error:
             raise ConfigError(f"Host {name!r} is missing a required setting") from error
@@ -151,6 +154,8 @@ def validate_host(host: HostConfig) -> None:
     if not all(isinstance(job, str) and BACKUP_JOB_PATTERN.fullmatch(job)
                for job in host.backup_jobs):
         raise ConfigError(f"Host {host.name!r} has an invalid backup job")
+    if host.environment not in ENVIRONMENTS:
+        raise ConfigError(f"Host {host.name!r} has an invalid environment classification")
 
 
 def save_hosts(path: Path, hosts: dict[str, HostConfig]) -> None:
@@ -217,6 +222,7 @@ def _serialize_hosts(hosts: dict[str, HostConfig]) -> str:
                 f"hostname = {json.dumps(host.hostname)}",
                 f"port = {host.port}",
                 f"username = {json.dumps(host.username)}",
+                f"environment = {json.dumps(host.environment)}",
                 f"known_hosts = {json.dumps(str(host.known_hosts))}",
                 "client_keys = " + _toml_array(str(key) for key in host.client_keys),
                 *( [f"password_env = {json.dumps(host.password_env)}"] if host.password_env else [] ),

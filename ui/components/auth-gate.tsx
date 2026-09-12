@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { LoaderCircle, ShieldCheck } from 'lucide-react';
 import { API } from '@/lib/api';
+import { AuthorityControl } from '@/components/authority-control';
 
 type Identity = { csrf_token: string; must_change_password: boolean };
 
@@ -50,7 +51,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     return () => { active = false; };
   }, [pathname, router]);
 
-  if (ready) return children;
+  if (ready) return <>{children}{!['/login', '/change-password'].includes(pathname) && <AuthorityControl />}</>;
   return <AuthSplash offline={offline} onRetry={() => location.reload()} />;
 }
 
