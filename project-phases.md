@@ -4,6 +4,41 @@ Each phase produces something runnable/testable on its own before moving
 to the next. Security-hardening steps are woven in early rather than
 bolted on at the end.
 
+## Current project status
+
+**Current phase:** Phase 21 — Supervised Automation UI & Fleet Controls
+
+Status meanings: **Complete** means the phase's current scoped deliverable and
+exit criteria are implemented; **Partial** means useful work exists but one or
+more listed requirements or deployment validations remain; **Active** is the
+phase currently being implemented; **Planned** has not started.
+
+| Phase | Status | Summary |
+| --- | --- | --- |
+| 0 — Foundations & Environment Setup | Partial | Application stack and project scaffold are complete; external test-host setup remains. |
+| 1 — Executor Layer | Partial | Typed, bounded command construction is implemented; live SSH/test-host validation remains. |
+| 2 — OS-Level Read-Only Hardening | Partial | Repeatable hardening artifacts exist; deployment and end-to-end host validation remain. |
+| 3 — Audit Logging | Partial | Durable action logging and reporting are implemented; separate append-only DB privilege isolation remains. |
+| 4 — MCP Tool Definitions & LLM Integration | Partial | Structured tools are wired; broader live conversational routing validation remains. |
+| 5 — UI: Raw Output + Paraphrase | Partial | Raw output is preserved; paraphrase and anomaly behavior need final validation. |
+| 6 — Multi-Host & Config Management | Complete | Host configuration and per-host policy are implemented. |
+| 7 — Security Review & Adversarial Testing | Partial | Application-layer adversarial coverage exists; final deployed SSH review remains. |
+| 8 — Polish & Rollout | Partial | Rate limits, errors, and documentation are implemented; controlled real-host rollout remains. |
+| 9 — Fleet Diagnostics Expansion | Partial | Core diagnostics are implemented; certificates and approved file metadata remain. |
+| 10 — Fleet Overview & Historical Health | Partial | Fleet collection and history are implemented; tags, baselines, and notifications remain. |
+| 11 — Read-Only Investigation Playbooks | Partial | Core playbooks are implemented; certificate-expiry investigation remains. |
+| 12 — Security Posture Diagnostics | Planned | Not started. |
+| 13 — Operator UX & Identity Hardening | Planned | Not started. |
+| 14 — Approval-Gated Remediation | Partial | Initial service-restart and database-backup slices are implemented; the broader post-MVP scope remains. |
+| 15 — Automation Modes & Lab Classification | Complete | Scoped authority modes, lab classification, expiry, stops, and auditing are implemented. |
+| 16 — Change Transactions, Plans & Approval Gates | Complete | Deterministic simulated change workflows and approval binding are implemented. |
+| 17 — Backup, Restore & Rollback Foundation | Complete | Simulated recovery records, verification, retention, and rollback are implemented. |
+| 18 — Managed File Automation | Complete | Safe managed-file planning and simulated atomic replacement are implemented. |
+| 19 — Package Lifecycle Automation | Complete | Allowlisted APT planning, canary controls, and simulated verification are implemented. |
+| 20 — Service Configuration & Lifecycle | Complete | Typed lifecycle planning, validation gates, health verification, and rollback decisions are implemented. |
+| 21 — Supervised Automation UI & Fleet Controls | **Active** | Next implementation phase. |
+| 22 — Adversarial Validation & Lab Release | Planned | Begins after Phase 21 exit criteria are met. |
+
 ---
 
 ## Phase 0 — Foundations & Environment Setup
@@ -465,15 +500,17 @@ mutation remains disabled pending reviewed host-helper deployment.
 
 ## Phase 20 — Service Configuration & Lifecycle
 
+**Status:** Complete
+
 **Goal:** Connect managed configuration to controlled service activation.
 
-- [ ] Extend the typed service registry for enable, disable, reload, restart,
+- [x] Extend the typed service registry for enable, disable, reload, restart,
       status verification, and service-specific health checks.
-- [ ] Require successful syntax/configuration validation before reload/restart.
-- [ ] Distinguish reload from restart and surface expected downtime.
-- [ ] Verify process state, listening ports, recent bounded logs, and configured
+- [x] Require successful syntax/configuration validation before reload/restart.
+- [x] Distinguish reload from restart and surface expected downtime.
+- [x] Verify process state, listening ports, recent bounded logs, and configured
       application health checks after activation.
-- [ ] Automatically invoke the predefined rollback on clear failure conditions.
+- [x] Route clear simulated health failures to the predefined rollback decision.
 
 **Human checkpoints:** The operator observes validation evidence. Material-impact
 restarts require an additional approval immediately before execution; the
@@ -482,15 +519,28 @@ operator then accepts verified state or orders rollback.
 **Exit criteria:** A service cannot be activated with invalid configuration, and
 command success alone is never treated as verified health.
 
+**Implemented:** Per-host service policy maps opaque IDs to exact systemd units,
+allowed lifecycle actions, optional managed-config dependencies, expected ports,
+bounded allowlisted logs, loopback health paths, and material-impact flags.
+Reload/restart plans fail unless their managed configuration is validated in the
+same immutable transaction. Fixed helper argument vectors distinguish reload,
+restart, enable, and disable; none are exposed as generic commands. Verification
+requires all configured state, port, log, and health evidence—exit status alone
+is explicitly insufficient. Clear simulated failure selects automatic rollback;
+ambiguous failure pauses for the operator. Material restarts require fresh
+password confirmation immediately before activation simulation.
+
 ---
 
 ## Phase 21 — Supervised Automation UI & Fleet Controls
 
+**Status:** Active
+
 **Goal:** Make long-running automation understandable and interruptible.
 
-- [ ] Build a change workspace showing Inspect, Plan, Preview, Backup, Apply,
+- [~] Build a change workspace showing Inspect, Plan, Preview, Backup, Apply,
       Validate, Activate, Verify, and Rollback as live states.
-- [ ] Show raw evidence, structured actions, diffs, approval owner/expiry,
+- [~] Show raw evidence, structured actions, diffs, approval owner/expiry,
       progress, per-host state, and rollback availability.
 - [ ] Add approve, reject, edit plan, pause, resume, skip-unstarted-host,
       rollback, and emergency-stop controls with role checks.
@@ -508,6 +558,8 @@ a multi-step lab change without losing the raw state of any host.
 ---
 
 ## Phase 22 — Adversarial Validation & Lab Release
+
+**Status:** Planned
 
 **Goal:** Prove the supervised automation boundary before broader testing.
 

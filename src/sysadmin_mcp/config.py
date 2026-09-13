@@ -22,6 +22,9 @@ ENVIRONMENTS = frozenset({"production", "staging", "development", "disposable_la
 FILE_VALIDATORS = frozenset({"plain", "nginx", "systemd"})
 FILE_MODES = frozenset({"0600", "0640", "0644"})
 PACKAGE_MANAGERS = frozenset({"apt"})
+SERVICE_ACTIONS = frozenset({
+    "enable_service", "disable_service", "reload_service", "restart_service"
+})
 FORBIDDEN_FILE_ROOTS = ("/proc", "/sys", "/dev", "/run")
 
 
@@ -69,6 +72,19 @@ class PackagePolicy:
 
 
 @dataclass(frozen=True)
+class ServicePolicy:
+    id: str
+    unit: str
+    actions: tuple[str, ...]
+    config_path_id: str | None = None
+    listen_ports: tuple[int, ...] = ()
+    health_path: str | None = None
+    log_path: PurePosixPath | None = None
+    max_log_lines: int = 100
+    material_restart: bool = True
+
+
+@dataclass(frozen=True)
 class HostConfig:
     """A single SSH target and the log files it permits reading."""
 
@@ -86,6 +102,7 @@ class HostConfig:
     managed_files: tuple[ManagedFilePolicy, ...] = ()
     package_manager: str = "apt"
     packages: tuple[PackagePolicy, ...] = ()
+    services: tuple[ServicePolicy, ...] = ()
     environment: str = "production"
 
 
@@ -138,6 +155,7 @@ def load_hosts(path: Path) -> dict[str, HostConfig]:
                 managed_files=_managed_files(values.get("managed_files", [])),
                 package_manager=values.get("package_manager", "apt"),
                 packages=_packages(values.get("packages", [])),
+                services=_services(values.get("services", [])),
                 environment=values.get("environment", "production"),
             )
         except (KeyError, TypeError) as error:
@@ -205,6 +223,11 @@ def validate_host(host: HostConfig) -> None:
     if (host.package_manager not in PACKAGE_MANAGERS or len(package_ids) != len(set(package_ids))
             or not all(_valid_package(item) for item in host.packages)):
         raise ConfigError(f"Host {host.name!r} has an invalid package policy")
+    service_ids = [policy.id for policy in host.services]
+    if len(service_ids) != len(set(service_ids)) or not all(
+        _valid_service(item, host) for item in host.services
+    ):
+        raise ConfigError(f"Host {host.name!r} has an invalid service policy")
 
 
 def save_hosts(path: Path, hosts: dict[str, HostConfig]) -> None:
@@ -322,6 +345,40 @@ def _valid_package(policy: PackagePolicy) -> bool:
     )
 
 
+def _services(value: object) -> tuple[ServicePolicy, ...]:
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ConfigError("services must be a list of policy tables")
+    try:
+        return tuple(ServicePolicy(
+            id=item["id"], unit=item["unit"], actions=tuple(item["actions"]),
+            config_path_id=item.get("config_path_id"),
+            listen_ports=tuple(item.get("listen_ports", [])),
+            health_path=item.get("health_path"),
+            log_path=PurePosixPath(item["log_path"]) if item.get("log_path") else None,
+            max_log_lines=item.get("max_log_lines", 100),
+            material_restart=item.get("material_restart", True),
+        ) for item in value)
+    except (KeyError, TypeError) as error:
+        raise ConfigError("services contains an incomplete policy") from error
+
+
+def _valid_service(policy: ServicePolicy, host: HostConfig) -> bool:
+    file_ids = {item.id for item in host.managed_files}
+    return (
+        MANAGED_FILE_ID_PATTERN.fullmatch(policy.id) is not None
+        and SERVICE_NAME_PATTERN.fullmatch(policy.unit) is not None
+        and 1 <= len(policy.actions) <= 4 and set(policy.actions) <= SERVICE_ACTIONS
+        and (policy.config_path_id is None or policy.config_path_id in file_ids)
+        and len(policy.listen_ports) <= 20
+        and all(isinstance(port, int) and not isinstance(port, bool) and 1 <= port <= 65535
+                for port in policy.listen_ports)
+        and (policy.health_path is None or re.fullmatch(r"/[A-Za-z0-9._~!$&'()*+,;=:@%/-]{0,255}", policy.health_path))
+        and (policy.log_path is None or policy.log_path in host.allowed_logs)
+        and isinstance(policy.max_log_lines, int) and not isinstance(policy.max_log_lines, bool)
+        and 1 <= policy.max_log_lines <= 200 and isinstance(policy.material_restart, bool)
+    )
+
+
 def _serialize_hosts(hosts: dict[str, HostConfig]) -> str:
     if not hosts:
         return "[hosts]\n"
@@ -348,6 +405,7 @@ def _serialize_hosts(hosts: dict[str, HostConfig]) -> str:
                 "managed_files = " + _toml_managed_files(host.managed_files),
                 f"package_manager = {json.dumps(host.package_manager)}",
                 "packages = " + _toml_packages(host.packages),
+                "services = " + _toml_services(host.services),
                 "",
                 f"[hosts.{table_name}.thresholds]",
                 f"cpu_percent = {float(host.thresholds.cpu_percent)}",
@@ -386,4 +444,21 @@ def _toml_packages(values: tuple[PackagePolicy, ...]) -> str:
             f"reboot_required = {str(item.reboot_required).lower()}",
             f"held = {str(item.held).lower()}",
         )) + " }")
+    return "[" + ", ".join(rows) + "]"
+
+
+def _toml_services(values: tuple[ServicePolicy, ...]) -> str:
+    rows = []
+    for item in values:
+        fields = [
+            f"id = {json.dumps(item.id)}", f"unit = {json.dumps(item.unit)}",
+            "actions = " + _toml_array(item.actions),
+            "listen_ports = [" + ", ".join(str(port) for port in item.listen_ports) + "]",
+            f"max_log_lines = {item.max_log_lines}",
+            f"material_restart = {str(item.material_restart).lower()}",
+        ]
+        if item.config_path_id: fields.append(f"config_path_id = {json.dumps(item.config_path_id)}")
+        if item.health_path: fields.append(f"health_path = {json.dumps(item.health_path)}")
+        if item.log_path: fields.append(f"log_path = {json.dumps(str(item.log_path))}")
+        rows.append("{ " + ", ".join(fields) + " }")
     return "[" + ", ".join(rows) + "]"

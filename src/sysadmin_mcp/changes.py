@@ -18,6 +18,7 @@ from .authority import AuthorityDenied, AuthorityService
 from .recovery import RecoveryDenied, RecoveryStore
 from .managed_files import ManagedFileDenied, ManagedFilePlanner
 from .packages import PackageDenied, PackagePlanner
+from .services import ServiceDenied, ServicePlanner
 
 APPROVAL_TTL = timedelta(minutes=5)
 ACTION_CAPABILITIES = {
@@ -59,12 +60,14 @@ class ChangeTransactionService:
                  *, now: Callable[[], datetime] | None = None,
                  recovery: RecoveryStore | None = None,
                  managed_files: ManagedFilePlanner | None = None,
-                 packages: PackagePlanner | None = None) -> None:
+                 packages: PackagePlanner | None = None,
+                 services: ServicePlanner | None = None) -> None:
         self.path, self.authority, self.audit = path, authority, audit
         self._now = now or (lambda: datetime.now(UTC))
         self.recovery = recovery or RecoveryStore(path, audit, now=self._now)
         self.managed_files = managed_files
         self.packages = packages
+        self.services = services
         with self._connect() as db:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS change_transactions (
@@ -85,6 +88,7 @@ class ChangeTransactionService:
         hosts = sorted({item.host for item in actions})
         capabilities = sorted({ACTION_CAPABILITIES[item.action] for item in actions})
         self.authority.authorize_plan(username, session_id, hosts, capabilities, len(actions))
+        validated = _validated_files(actions)
         for item in actions:
             if item.action == "write_managed_file":
                 if self.managed_files is None:
@@ -94,6 +98,10 @@ class ChangeTransactionService:
                 if self.packages is None:
                     raise ChangeDenied("Package policy is unavailable")
                 self.packages.preview(item.action, item.host, item.target, item.version)
+            if item.action in {"enable_service", "disable_service", "reload_service", "restart_service"}:
+                if self.services is None:
+                    raise ChangeDenied("Service policy is unavailable")
+                self.services.preview(item.action, item.host, item.target, validated.get(item.host, ()))
         encoded = _canonical([item.model_dump() for item in actions])
         now, transaction_id = self._utc_now(), str(uuid4())
         with self._connect() as db:
@@ -111,6 +119,7 @@ class ChangeTransactionService:
         if row["state"] not in {"planned", "previewed"}:
             raise ChangeDenied("Only a planned transaction can be previewed")
         actions = json.loads(row["actions"])
+        validated = _validated_files([ChangeAction.model_validate(item) for item in actions])
         snapshots = self.recovery.capture(transaction_id, actions, username, session_id)
         snapshots_by_index = {item["action_index"]: item for item in snapshots}
         preview = []
@@ -132,6 +141,13 @@ class ChangeTransactionService:
                 item["package"] = self.packages.preview(
                     str(action["action"]), str(action["host"]), str(action["target"]),
                     str(action["version"]) if action.get("version") else None,
+                )
+            if action["action"] in {"enable_service", "disable_service", "reload_service", "restart_service"}:
+                if self.services is None:
+                    raise ChangeDenied("Service policy is unavailable")
+                item["service"] = self.services.preview(
+                    str(action["action"]), str(action["host"]), str(action["target"]),
+                    validated.get(str(action["host"]), ()),
                 )
             if index in snapshots_by_index:
                 item["recovery_snapshot"] = snapshots_by_index[index]
@@ -174,6 +190,8 @@ class ChangeTransactionService:
         self.authority.authorize_plan(username, session_id, hosts, capabilities, len(actions))
         file_plans = []
         package_plans = []
+        service_plans = []
+        validated = _validated_files(actions)
         for item in actions:
             if item.action == "write_managed_file":
                 if self.managed_files is None:
@@ -185,6 +203,12 @@ class ChangeTransactionService:
                 package_plans.append({"host": item.host, **self.packages.preview(
                     item.action, item.host, item.target, item.version
                 )})
+            if item.action in {"enable_service", "disable_service", "reload_service", "restart_service"}:
+                if self.services is None:
+                    raise ChangeDenied("Service policy is unavailable")
+                service_plans.append(self.services.preview(
+                    item.action, item.host, item.target, validated.get(item.host, ())
+                ))
         snapshots = self.recovery.capture(
             transaction_id, [item.model_dump() for item in actions], username, session_id
         )
@@ -207,6 +231,12 @@ class ChangeTransactionService:
             if stage in {"apply", "verify"} and package_plans:
                 entry["packages"] = package_plans
                 entry["rollout"] = self.packages.rollout(package_plans) if self.packages else None
+            if stage in {"validate", "verify"} and service_plans:
+                entry["services"] = service_plans
+                if stage == "verify" and self.services:
+                    entry["service_outcomes"] = [self.services.evaluate(
+                        plan, [{"passed": True} for _ in plan["verification_checks"]]
+                    ) for plan in service_plans]
             evidence.append(entry)
             self._update(transaction_id, state=state, evidence=_canonical(evidence),
                          approval_hash=None, approval_expires_at=None)
@@ -215,6 +245,14 @@ class ChangeTransactionService:
         self._audit(transaction_id, session_id, username, "change_simulation_completed",
                     {"actions": len(actions), "remote_mutation": False})
         return self.get(transaction_id, username, session_id)
+
+    def requires_material_approval(self, transaction_id: str, username: str,
+                                   session_id: str) -> bool:
+        row = self._owned(transaction_id, username, session_id)
+        if row["state"] != "approved":
+            raise ChangeDenied("Transaction is not ready for activation")
+        return any(item.get("service", {}).get("material_approval_required")
+                   for item in json.loads(row["preview"] or "[]"))
 
     def accept(self, transaction_id: str, username: str, session_id: str) -> dict[str, object]:
         row = self._owned(transaction_id, username, session_id)
@@ -306,6 +344,14 @@ def _effect(action: Mapping[str, object]) -> str:
     return f"SIMULATION ONLY: {verb} {action['target']} on {action['host']}"
 
 
+def _validated_files(actions: Sequence[ChangeAction]) -> dict[str, tuple[str, ...]]:
+    result: dict[str, list[str]] = {}
+    for item in actions:
+        if item.action == "write_managed_file":
+            result.setdefault(item.host, []).append(item.target)
+    return {host: tuple(ids) for host, ids in result.items()}
+
+
 def _content_hash(action: Mapping[str, object]) -> str | None:
     value = action.get("value")
     return hashlib.sha256(str(value).encode()).hexdigest() if value is not None else None
@@ -351,5 +397,8 @@ def _public(row: Mapping[str, object]) -> dict[str, object]:
         "title": row["title"], "state": row["state"],
         "actions": json.loads(str(row["actions"])), "plan_hash": row["plan_hash"],
         "preview": json.loads(str(row["preview"])) if row["preview"] else None,
-        "diff_hash": row["diff_hash"], "evidence": json.loads(str(row["evidence"])),
+        "diff_hash": row["diff_hash"],
+        "approval_expires_at": row["approval_expires_at"],
+        "rollback_available": row["state"] in {"approved", "verifying", "failed"},
+        "evidence": json.loads(str(row["evidence"])),
     }

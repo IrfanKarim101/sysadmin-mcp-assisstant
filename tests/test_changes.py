@@ -7,9 +7,10 @@ from pydantic import ValidationError
 from sysadmin_mcp.audit import SQLiteAuditLog
 from sysadmin_mcp.authority import AuthorityDenied, AuthorityService
 from sysadmin_mcp.changes import ChangeAction, ChangeDenied, ChangeTransactionService
-from sysadmin_mcp.config import HostConfig, ManagedFilePolicy, PackagePolicy
+from sysadmin_mcp.config import HostConfig, ManagedFilePolicy, PackagePolicy, ServicePolicy
 from sysadmin_mcp.managed_files import ManagedFilePlanner
 from sysadmin_mcp.packages import PackagePlanner
+from sysadmin_mcp.services import ServicePlanner
 
 
 def host() -> HostConfig:
@@ -24,6 +25,7 @@ def host() -> HostConfig:
         ),),
         packages=(PackagePolicy("nginx", "nginx", ("1.24.0-1",),
                                 dependent_services=("nginx.service",)),),
+        services=(ServicePolicy("nginx", "nginx.service", ("restart_service",)),),
     )
 
 
@@ -39,24 +41,31 @@ def services(tmp_path, now=None):
         audit.path, authority, audit, now=now,
         managed_files=ManagedFilePlanner({"lab": host()}),
         packages=PackagePlanner({"lab": host()}),
+        services=ServicePlanner({"lab": host()}),
     )
 
 
 def test_transaction_is_deterministic_single_use_and_never_mutates_remote(tmp_path):
     authority, changes = services(tmp_path)
-    action = ChangeAction(action="restart_service", host="lab", target="nginx.service")
+    action = ChangeAction(action="restart_service", host="lab", target="nginx")
     created = changes.create("admin", "session-a", "Restart web", [action])
     first = changes.preview(created["id"], "admin", "session-a")
     second = changes.preview(created["id"], "admin", "session-a")
     assert first["diff_hash"] == second["diff_hash"]
     approved = changes.approve(created["id"], "admin", "session-a")
+    assert approved["approval_expires_at"] is not None
+    assert approved["rollback_available"] is True
     result = changes.simulate(created["id"], approved["approval_token"], "admin", "session-a")
     assert result["state"] == "verifying"
+    assert result["approval_expires_at"] is None
+    assert result["rollback_available"] is True
     assert all(event["remote_mutation"] is False for event in result["evidence"])
     assert authority.current()["actions_used"] == 1
     with pytest.raises(ChangeDenied, match="already used"):
         changes.simulate(created["id"], approved["approval_token"], "admin", "session-a")
-    assert changes.accept(created["id"], "admin", "session-a")["state"] == "accepted"
+    accepted = changes.accept(created["id"], "admin", "session-a")
+    assert accepted["state"] == "accepted"
+    assert accepted["rollback_available"] is False
 
 
 @pytest.mark.parametrize("bad", [
@@ -83,7 +92,7 @@ def test_oversized_plan_and_content_are_rejected(tmp_path):
 def test_scope_budget_session_and_expiry_are_rechecked(tmp_path):
     current = [datetime(2026, 1, 1, tzinfo=UTC)]
     authority, changes = services(tmp_path, lambda: current[0])
-    action = ChangeAction(action="restart_service", host="lab", target="nginx.service")
+    action = ChangeAction(action="restart_service", host="lab", target="nginx")
     created = changes.create("admin", "session-a", "Restart", [action])
     changes.preview(created["id"], "admin", "session-a")
     approved = changes.approve(created["id"], "admin", "session-a")

@@ -35,6 +35,7 @@ from .fleet_store import FleetSnapshotStore
 from .models import CommandResult
 from .managed_files import ManagedFileDenied, ManagedFilePlanner
 from .packages import PackageDenied, PackagePlanner
+from .services import ServiceDenied, ServicePlanner
 from .onboarding import HostOnboardingService, VMOnboardingRequest
 from .playbooks import PlaybookRunner
 from .presentation import DiagnosticPresenter
@@ -168,6 +169,7 @@ class ChangeApproveRequest(BaseModel):
 class ChangeSimulateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     approval_token: str = Field(min_length=32, max_length=256)
+    activation_password: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -391,6 +393,7 @@ def create_app(
     changes = changes or ChangeTransactionService(
         audit.path, authority, audit, managed_files=ManagedFilePlanner(service.hosts),
         packages=PackagePlanner(service.hosts),
+        services=ServicePlanner(service.hosts),
     )
     fleet = FleetHealthService(service.executor, store=FleetSnapshotStore(audit.path))
 
@@ -588,12 +591,18 @@ def create_app(
         change_operator(request)
         return changes.packages.policies() if changes.packages else []
 
+    @app.get("/api/services/policies")
+    async def service_policies(request: Request) -> list[dict[str, object]]:
+        change_operator(request)
+        return changes.services.policies() if changes.services else []
+
     @app.post("/api/changes")
     async def change_create(body: ChangeCreateRequest, request: Request) -> dict[str, object]:
         session = change_operator(request)
         try:
             return changes.create(session.username, session.session_id, body.title, body.actions)
-        except (ChangeDenied, AuthorityDenied, RecoveryDenied, ManagedFileDenied, PackageDenied) as error:
+        except (ChangeDenied, AuthorityDenied, RecoveryDenied, ManagedFileDenied,
+                PackageDenied, ServiceDenied) as error:
             raise HTTPException(400, str(error)) from error
 
     @app.get("/api/changes/{transaction_id}")
@@ -609,7 +618,7 @@ def create_app(
         session = change_operator(request)
         try:
             return changes.preview(transaction_id, session.username, session.session_id)
-        except (ChangeDenied, ManagedFileDenied, RecoveryDenied, PackageDenied) as error:
+        except (ChangeDenied, ManagedFileDenied, RecoveryDenied, PackageDenied, ServiceDenied) as error:
             raise HTTPException(400, str(error)) from error
 
     @app.post("/api/changes/{transaction_id}/approve")
@@ -628,9 +637,16 @@ def create_app(
                               request: Request) -> dict[str, object]:
         session = change_operator(request)
         try:
+            if changes.requires_material_approval(
+                transaction_id, session.username, session.session_id
+            ) and (not body.activation_password or not auth.verify_password(
+                session.username, body.activation_password
+            )):
+                raise HTTPException(401, "Material service activation requires fresh reauthentication")
             return changes.simulate(transaction_id, body.approval_token,
                                     session.username, session.session_id)
-        except (ChangeDenied, AuthorityDenied, RecoveryDenied, ManagedFileDenied, PackageDenied) as error:
+        except (ChangeDenied, AuthorityDenied, RecoveryDenied, ManagedFileDenied,
+                PackageDenied, ServiceDenied) as error:
             raise HTTPException(400, str(error)) from error
 
     @app.post("/api/changes/{transaction_id}/accept")
@@ -677,6 +693,8 @@ def create_app(
             changes.managed_files.replace_hosts(service.hosts)
         if changes.packages is not None:
             changes.packages.replace_hosts(service.hosts)
+        if changes.services is not None:
+            changes.services.replace_hosts(service.hosts)
         if changes.packages is not None:
             changes.packages.replace_hosts(service.hosts)
         if remediation is not None:

@@ -7,7 +7,7 @@ port = 22
 username = "sysadmin-readonly"
 known_hosts = "~/.ssh/known_hosts"
 client_keys = ["~/.ssh/sysadmin_readonly"]
-allowed_logs = ["/var/log/auth.log", "/var/log/syslog"]
+allowed_logs = ["/var/log/auth.log", "/var/log/syslog", "/var/log/nginx/error.log"]
 # Empty by default. Phase 14 actions must be explicitly named per host.
 restart_services = []
 managed_files = [
@@ -16,6 +16,9 @@ managed_files = [
 package_manager = "apt"
 packages = [
   { id = "nginx", name = "nginx", allowed_versions = ["1.24.0-1ubuntu1"], dependencies = [], dependent_services = ["nginx.service"], download_bytes = 1000000, disk_bytes = 3000000, reboot_required = false, held = false }
+]
+services = [
+  { id = "nginx", unit = "nginx.service", actions = ["reload_service", "restart_service"], listen_ports = [80], max_log_lines = 100, material_restart = true, config_path_id = "nginx-site", health_path = "/health", log_path = "/var/log/nginx/error.log" }
 ]
 # Typed job IDs only. The root-owned host policy maps IDs to exact script paths.
 backup_jobs = []
