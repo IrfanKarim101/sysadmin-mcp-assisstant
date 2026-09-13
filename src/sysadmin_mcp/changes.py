@@ -114,6 +114,47 @@ class ChangeTransactionService:
                     {"hosts": hosts, "capabilities": capabilities, "actions": len(actions)})
         return self.get(transaction_id, username, session_id)
 
+    def revise(self, transaction_id: str, username: str, session_id: str,
+               title: str, actions: Sequence[ChangeAction]) -> dict[str, object]:
+        """Replace a reviewable plan with a new transaction and invalidate the old one."""
+        row = self._owned(transaction_id, username, session_id)
+        if row["state"] not in {"planned", "previewed", "approved"}:
+            raise ChangeDenied("Only an unexecuted transaction can be edited")
+        replacement = self.create(username, session_id, title, actions)
+        self._update(transaction_id, state="cancelled", approval_hash=None,
+                     approval_expires_at=None)
+        self._audit(transaction_id, session_id, username, "change_plan_revised", {
+            "replacement_transaction_id": replacement["id"],
+            "approval_invalidated": bool(row["approval_hash"]),
+        })
+        self._audit(str(replacement["id"]), session_id, username,
+                    "change_plan_revision_created", {
+                        "replaces_transaction_id": transaction_id,
+                    })
+        return replacement
+
+    def skip_host(self, transaction_id: str, username: str, session_id: str,
+                  host: str) -> dict[str, object]:
+        """Create a replacement plan without one not-yet-started host."""
+        row = self._owned(transaction_id, username, session_id)
+        if row["state"] not in {"planned", "previewed", "approved"}:
+            raise ChangeDenied("Hosts can only be skipped before execution starts")
+        actions = [ChangeAction.model_validate(item) for item in json.loads(row["actions"])]
+        planned_hosts = {item.host for item in actions}
+        if host not in planned_hosts:
+            raise ChangeDenied("Host is not part of this transaction")
+        remaining = [item for item in actions if item.host != host]
+        if not remaining:
+            raise ChangeDenied("Cannot skip the only host; reject the plan instead")
+        replacement = self.revise(
+            transaction_id, username, session_id, str(row["title"]), remaining
+        )
+        self._audit(transaction_id, session_id, username, "change_host_skipped", {
+            "host": host,
+            "replacement_transaction_id": replacement["id"],
+        })
+        return replacement
+
     def preview(self, transaction_id: str, username: str, session_id: str) -> dict[str, object]:
         row = self._owned(transaction_id, username, session_id)
         if row["state"] not in {"planned", "previewed"}:

@@ -161,6 +161,10 @@ class ChangeCreateRequest(BaseModel):
     actions: list[ChangeAction] = Field(min_length=1, max_length=50)
 
 
+class ChangeReviseRequest(ChangeCreateRequest):
+    pass
+
+
 class ChangeApproveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     password: str = Field(min_length=1, max_length=256)
@@ -170,6 +174,11 @@ class ChangeSimulateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     approval_token: str = Field(min_length=32, max_length=256)
     activation_password: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class ChangeSkipHostRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -601,6 +610,28 @@ def create_app(
         session = change_operator(request)
         try:
             return changes.create(session.username, session.session_id, body.title, body.actions)
+        except (ChangeDenied, AuthorityDenied, RecoveryDenied, ManagedFileDenied,
+                PackageDenied, ServiceDenied) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/changes/{transaction_id}/revise")
+    async def change_revise(transaction_id: str, body: ChangeReviseRequest,
+                            request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        try:
+            return changes.revise(transaction_id, session.username, session.session_id,
+                                  body.title, body.actions)
+        except (ChangeDenied, AuthorityDenied, RecoveryDenied, ManagedFileDenied,
+                PackageDenied, ServiceDenied) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/changes/{transaction_id}/skip-host")
+    async def change_skip_host(transaction_id: str, body: ChangeSkipHostRequest,
+                               request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        try:
+            return changes.skip_host(transaction_id, session.username,
+                                     session.session_id, body.host)
         except (ChangeDenied, AuthorityDenied, RecoveryDenied, ManagedFileDenied,
                 PackageDenied, ServiceDenied) as error:
             raise HTTPException(400, str(error)) from error

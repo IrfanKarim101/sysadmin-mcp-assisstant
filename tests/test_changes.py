@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -114,6 +115,88 @@ def test_invalid_state_transitions_are_denied(tmp_path):
         changes.accept(created["id"], "admin", "session-a")
     with pytest.raises(ChangeDenied, match="eligible"):
         changes.rollback(created["id"], "admin", "session-a")
+
+
+def test_revision_replaces_plan_and_invalidates_existing_approval(tmp_path):
+    _, changes = services(tmp_path)
+    original_action = ChangeAction(action="restart_service", host="lab", target="nginx")
+    original = changes.create("admin", "session-a", "RestartRestart", [original_action])
+    changes.preview(original["id"], "admin", "session-a")
+    approved = changes.approve(original["id"], "admin", "session-a")
+
+    replacement_action = ChangeAction(action="run_backup", host="lab", target="database-dump")
+    replacement = changes.revise(
+        original["id"], "admin", "session-a", "Backup first", [replacement_action]
+    )
+
+    assert replacement["id"] != original["id"]
+    assert replacement["state"] == "planned"
+    assert replacement["actions"] == [replacement_action.model_dump()]
+    assert changes.get(original["id"], "admin", "session-a")["state"] == "cancelled"
+    with pytest.raises(ChangeDenied, match="already used"):
+        changes.simulate(
+            original["id"], approved["approval_token"], "admin", "session-a"
+        )
+
+
+def test_executed_transaction_cannot_be_revised(tmp_path):
+    _, changes = services(tmp_path)
+    action = ChangeAction(action="restart_service", host="lab", target="nginx")
+    created = changes.create("admin", "session-a", "Restart", [action])
+    changes.preview(created["id"], "admin", "session-a")
+    approved = changes.approve(created["id"], "admin", "session-a")
+    changes.simulate(created["id"], approved["approval_token"], "admin", "session-a")
+    with pytest.raises(ChangeDenied, match="unexecuted"):
+        changes.revise(created["id"], "admin", "session-a", "Changed", [action])
+
+
+def test_skip_host_creates_reduced_plan_and_invalidates_approval(tmp_path):
+    audit = SQLiteAuditLog(tmp_path / "audit.db")
+    second = replace(host(), name="lab-b", hostname="192.0.2.11")
+    hosts = {"lab": host(), "lab-b": second}
+    authority = AuthorityService(hosts, audit)
+    authority.arm(
+        mode="guided", username="admin", session_id="session-a",
+        hosts=["lab", "lab-b"], capabilities=["services"],
+        duration_minutes=15, action_budget=5, concurrency=2,
+    )
+    changes = ChangeTransactionService(
+        audit.path, authority, audit, services=ServicePlanner(hosts)
+    )
+    actions = [
+        ChangeAction(action="restart_service", host="lab", target="nginx"),
+        ChangeAction(action="restart_service", host="lab-b", target="nginx"),
+    ]
+    created = changes.create("admin", "session-a", "Fleet restart", actions)
+    changes.preview(created["id"], "admin", "session-a")
+    approved = changes.approve(created["id"], "admin", "session-a")
+
+    replacement = changes.skip_host(
+        created["id"], "admin", "session-a", "lab-b"
+    )
+
+    assert {item["host"] for item in replacement["actions"]} == {"lab"}
+    assert replacement["state"] == "planned"
+    assert changes.get(created["id"], "admin", "session-a")["state"] == "cancelled"
+    with pytest.raises(ChangeDenied, match="already used"):
+        changes.simulate(
+            created["id"], approved["approval_token"], "admin", "session-a"
+        )
+
+
+def test_skip_host_rejects_unknown_only_or_started_host(tmp_path):
+    _, changes = services(tmp_path)
+    action = ChangeAction(action="restart_service", host="lab", target="nginx")
+    created = changes.create("admin", "session-a", "Restart", [action])
+    with pytest.raises(ChangeDenied, match="not part"):
+        changes.skip_host(created["id"], "admin", "session-a", "other")
+    with pytest.raises(ChangeDenied, match="only host"):
+        changes.skip_host(created["id"], "admin", "session-a", "lab")
+    changes.preview(created["id"], "admin", "session-a")
+    approved = changes.approve(created["id"], "admin", "session-a")
+    changes.simulate(created["id"], approved["approval_token"], "admin", "session-a")
+    with pytest.raises(ChangeDenied, match="before execution"):
+        changes.skip_host(created["id"], "admin", "session-a", "lab")
 
 
 def test_managed_file_backup_precedes_approval_and_incomplete_diff_cannot_pass(tmp_path):

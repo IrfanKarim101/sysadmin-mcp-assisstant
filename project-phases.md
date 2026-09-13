@@ -542,7 +542,7 @@ password confirmation immediately before activation simulation.
       Validate, Activate, Verify, and Rollback as live states.
 - [~] Show raw evidence, structured actions, diffs, approval owner/expiry,
       progress, per-host state, and rollback availability.
-- [ ] Add approve, reject, edit plan, pause, resume, skip-unstarted-host,
+- [~] Add approve, reject, edit plan, pause, resume, skip-unstarted-host,
       rollback, and emergency-stop controls with role checks.
 - [ ] Use canary-first fleet rollout, bounded concurrency, per-host locks,
       action budgets, timeouts, and circuit breakers.

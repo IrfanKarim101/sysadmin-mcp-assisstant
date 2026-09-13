@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Check, ChevronDown, Circle, GitPullRequestDraft, LoaderCircle, RotateCcw, ShieldAlert } from 'lucide-react';
+import { Check, ChevronDown, Circle, GitPullRequestDraft, LoaderCircle, Pencil, RotateCcw, ShieldAlert, X } from 'lucide-react';
 import { AppNav } from '@/components/app-nav';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -60,6 +60,7 @@ export default function ChangesPage() {
   const [value, setValue] = useState(''), [password, setPassword] = useState('');
   const [version, setVersion] = useState('');
   const [activationPassword, setActivationPassword] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [tokens, setTokens] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
 
@@ -93,8 +94,16 @@ export default function ChangesPage() {
   }
   async function create(event: React.FormEvent) {
     event.preventDefault();
-    const data = await call('/api/changes', { title, actions: [{ action, host, target, ...(action === 'write_managed_file' ? { value } : {}), ...(['install_package','update_package'].includes(action) && version ? { version } : {}) }] });
-    if (data) { setTitle(''); setTarget(''); setValue(''); setVersion(''); }
+    const path = editingId ? `/api/changes/${editingId}/revise` : '/api/changes';
+    const data = await call(path, { title, actions: [{ action, host, target, ...(action === 'write_managed_file' ? { value } : {}), ...(['install_package','update_package'].includes(action) && version ? { version } : {}) }] });
+    if (data) { setTitle(''); setTarget(''); setValue(''); setVersion(''); setEditingId(null); await load(); }
+  }
+  function edit(item: Change) {
+    if (item.actions.length !== 1) return;
+    const selected = item.actions[0];
+    setEditingId(item.id); setTitle(item.title); setHost(selected.host); setAction(selected.action);
+    setTarget(selected.target); setValue(selected.value || ''); setVersion(selected.version || '');
+    scrollTo({ top: 0, behavior: 'smooth' });
   }
   const availableFiles = filePolicies.find((item) => item.host === host)?.files || [];
   const availablePackages = packagePolicies.find((item) => item.host === host)?.packages || [];
@@ -110,19 +119,20 @@ export default function ChangesPage() {
       {error && <p role="alert" className="rounded-xl bg-red-400/10 p-3 text-sm text-red-200">{error}</p>}
       <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
         <form onSubmit={create} className="space-y-3 rounded-2xl border bg-card p-5">
-          <h2 className="flex items-center gap-2 font-medium"><GitPullRequestDraft className="size-4"/>New typed plan</h2>
+          <div className="flex items-center justify-between"><h2 className="flex items-center gap-2 font-medium"><GitPullRequestDraft className="size-4"/>{editingId ? 'Revise typed plan' : 'New typed plan'}</h2>{editingId && <Button type="button" size="icon" variant="ghost" aria-label="Stop editing" onClick={() => { setEditingId(null); setTitle(''); setTarget(''); setValue(''); setVersion(''); }}><X/></Button>}</div>
+          {editingId && <p className="rounded-lg bg-amber-400/10 p-2 text-xs text-amber-200">Saving creates a new immutable transaction and permanently invalidates any approval on the original.</p>}
           <Label>Title<Input required maxLength={120} value={title} onChange={(e) => setTitle(e.target.value)}/></Label>
           <Label>Host<NativeSelect value={host} onChange={(e) => { setHost(e.target.value); setTarget(''); }}>{hosts.map((item) => <NativeSelectOption key={item.name} value={item.name}>{item.name}</NativeSelectOption>)}</NativeSelect></Label>
           <Label>Action<NativeSelect value={action} onChange={(e) => { setAction(e.target.value); setTarget(''); }}>{actionTypes.map((item) => <NativeSelectOption key={item} value={item}>{item.replaceAll('_', ' ')}</NativeSelectOption>)}</NativeSelect></Label>
           {action === 'write_managed_file' ? <Label>Managed path ID<NativeSelect required value={target} onChange={(e) => setTarget(e.target.value)}><NativeSelectOption value="">Select an allowlisted file</NativeSelectOption>{availableFiles.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.id} — {item.path}</NativeSelectOption>)}</NativeSelect><span className="text-[11px] text-muted-foreground">The API receives this ID, never a raw path.</span></Label> : packageAction ? <><Label>Package ID<NativeSelect required value={target} onChange={(e) => { setTarget(e.target.value); setVersion(''); }}><NativeSelectOption value="">Select an allowlisted package</NativeSelectOption>{availablePackages.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.id} — {item.name}{item.held ? ' (held)' : ''}</NativeSelectOption>)}</NativeSelect></Label>{selectedPackage && <Label>Approved version<NativeSelect value={version} onChange={(e) => setVersion(e.target.value)}><NativeSelectOption value="">Policy default</NativeSelectOption>{selectedPackage.allowed_versions.map((item) => <NativeSelectOption key={item} value={item}>{item}</NativeSelectOption>)}</NativeSelect></Label>}</> : serviceAction ? <Label>Service ID<NativeSelect required value={target} onChange={(e) => setTarget(e.target.value)}><NativeSelectOption value="">Select an allowlisted service</NativeSelectOption>{availableServices.map((item) => <NativeSelectOption key={item.id} value={item.id}>{item.id} — {item.unit}</NativeSelectOption>)}</NativeSelect></Label> : <Label>Policy target<Input required maxLength={128} value={target} onChange={(e) => setTarget(e.target.value)}/></Label>}
           {action === 'write_managed_file' && <Label>Proposed content<textarea required maxLength={32000} className="mt-1 min-h-28 w-full rounded-md border bg-background p-2 text-sm" value={value} onChange={(e) => setValue(e.target.value)}/></Label>}
-          <Button className="w-full" disabled={busy || !host}>{busy && <LoaderCircle className="animate-spin"/>}Create plan</Button>
+          <Button className="w-full" disabled={busy || !host}>{busy && <LoaderCircle className="animate-spin"/>}{editingId ? 'Save revised plan' : 'Create plan'}</Button>
         </form>
         <div className="space-y-4">{items.length === 0 && <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">No transactions in this session.</div>}{items.map((item) => <article key={item.id} className="rounded-2xl border bg-card p-5">
           <div className="flex flex-wrap justify-between gap-2"><h2 className="font-medium">{item.title}</h2><span className="rounded-full bg-muted px-3 py-1 text-xs">{item.state}</span></div>
           <WorkflowProgress item={item}/>
           <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-            {[...new Set(item.actions.map((entry) => entry.host))].map((name) => <span key={name} className="rounded-full border px-2 py-1">{name} · {item.state}</span>)}
+            {[...new Set(item.actions.map((entry) => entry.host))].map((name, _index, allHosts) => <span key={name} className="flex items-center gap-1 rounded-full border px-2 py-1">{name} · {item.state}{allHosts.length > 1 && ['planned','previewed','approved'].includes(item.state) && <button type="button" className="ml-1 text-amber-200 hover:text-amber-100" disabled={busy} onClick={() => { if (confirm(`Skip ${name} and invalidate the current approval?`)) void call(`/api/changes/${item.id}/skip-host`, { host: name }).then(() => load()); }} aria-label={`Skip unstarted host ${name}`}><X className="size-3"/></button>}</span>)}
             <span>Updated {new Date(item.updated_at).toLocaleString()}</span>
             {item.approval_expires_at && <span className="text-amber-200">Approval expires {new Date(item.approval_expires_at).toLocaleString()}</span>}
             {item.rollback_available && <span className="flex items-center gap-1 text-emerald-200"><RotateCcw className="size-3"/>Rollback available</span>}
@@ -137,7 +147,8 @@ export default function ChangesPage() {
             {item.state === 'previewed' && <><Input className="max-w-56" type="password" placeholder="Re-enter password" value={password} onChange={(e) => setPassword(e.target.value)}/><Button disabled={busy || !password} onClick={async () => { await call(`/api/changes/${item.id}/approve`, { password }); setPassword(''); }}>Approve</Button></>}
             {item.state === 'approved' && <>{item.preview?.some((x) => x.service?.material_approval_required) && <Input className="max-w-56" type="password" placeholder="Confirm material activation" value={activationPassword} onChange={(e) => setActivationPassword(e.target.value)}/>}<Button disabled={busy || !tokens[item.id] || (!!item.preview?.some((x) => x.service?.material_approval_required) && !activationPassword)} onClick={async () => { await call(`/api/changes/${item.id}/simulate`, { approval_token: tokens[item.id], ...(activationPassword ? { activation_password: activationPassword } : {}) }); setActivationPassword(''); }}>Run simulation</Button></>}
             {item.state === 'verifying' && <><Button disabled={busy} onClick={() => call(`/api/changes/${item.id}/accept`)}>Accept evidence</Button><Button variant="outline" disabled={busy} onClick={() => call(`/api/changes/${item.id}/rollback`)}>Simulate rollback</Button></>}
-            {['planned','previewed','approved'].includes(item.state) && <Button variant="outline" disabled={busy} onClick={() => call(`/api/changes/${item.id}/cancel`)}>Cancel</Button>}
+            {['planned','previewed','approved'].includes(item.state) && item.actions.length === 1 && <Button variant="outline" disabled={busy} onClick={() => edit(item)}><Pencil/>Edit plan</Button>}
+            {['planned','previewed','approved'].includes(item.state) && <Button variant="outline" disabled={busy} onClick={() => call(`/api/changes/${item.id}/cancel`)}>Reject plan</Button>}
           </div>
         </article>)}</div>
       </div>
