@@ -21,6 +21,7 @@ from .packages import PackageDenied, PackagePlanner
 from .services import ServiceDenied, ServicePlanner
 
 APPROVAL_TTL = timedelta(minutes=5)
+ROLLOUT_TIMEOUT = timedelta(seconds=60)
 ACTION_CAPABILITIES = {
     "write_managed_file": "managed_files", "install_package": "packages",
     "update_package": "packages", "enable_service": "services",
@@ -79,6 +80,10 @@ class ChangeTransactionService:
             );
             CREATE INDEX IF NOT EXISTS idx_change_transactions_updated
               ON change_transactions(updated_at DESC);
+            CREATE TABLE IF NOT EXISTS change_host_locks (
+              host TEXT PRIMARY KEY, transaction_id TEXT NOT NULL,
+              acquired_at TEXT NOT NULL, expires_at TEXT NOT NULL
+            );
             """)
 
     def create(self, username: str, session_id: str, title: str,
@@ -217,7 +222,9 @@ class ChangeTransactionService:
                 "approval_token": token, "approval_expires_at": expires.isoformat()}
 
     def simulate(self, transaction_id: str, token: str, username: str,
-                 session_id: str) -> dict[str, object]:
+                 session_id: str, *,
+                 simulated_host_outcomes: Mapping[str, bool] | None = None,
+                 stop_after_backup: bool = False) -> dict[str, object]:
         row = self._owned(transaction_id, username, session_id)
         if row["state"] != "approved" or not row["approval_hash"] or not secrets.compare_digest(
             row["approval_hash"], _digest(token)
@@ -257,34 +264,105 @@ class ChangeTransactionService:
             transaction_id, [item.model_dump() for item in actions]
         )
         self.authority.consume(username, session_id, len(actions))
+        authority_state = self.authority.current()
+        rollout = _rollout(
+            hosts, int(authority_state["concurrency"]), simulated_host_outcomes
+        )
+        self._acquire_host_locks(transaction_id, hosts)
         evidence = []
-        for state, stage in (
-            ("backed_up", "backup"), ("applying", "apply"),
-            ("validating", "validate"), ("verifying", "verify"),
-        ):
-            entry: dict[str, object] = {
-                "stage": stage, "status": "simulated", "remote_mutation": False
-            }
-            if stage == "backup":
-                entry["snapshots"] = snapshots
-            if stage in {"apply", "validate"} and file_plans:
-                entry["managed_files"] = file_plans
-            if stage in {"apply", "verify"} and package_plans:
-                entry["packages"] = package_plans
-                entry["rollout"] = self.packages.rollout(package_plans) if self.packages else None
-            if stage in {"validate", "verify"} and service_plans:
-                entry["services"] = service_plans
-                if stage == "verify" and self.services:
-                    entry["service_outcomes"] = [self.services.evaluate(
-                        plan, [{"passed": True} for _ in plan["verification_checks"]]
-                    ) for plan in service_plans]
+        try:
+            for state, stage in (
+                ("backed_up", "backup"), ("applying", "apply"),
+                ("validating", "validate"), ("verifying", "verify"),
+            ):
+                circuit_open = rollout["circuit_breaker"] == "open" and stage == "apply"
+                entry: dict[str, object] = {
+                    "stage": stage,
+                    "status": "simulated_failed" if circuit_open else "simulated",
+                    "remote_mutation": False,
+                    "fleet_rollout": rollout,
+                }
+                if stage == "backup":
+                    entry["snapshots"] = snapshots
+                if stage in {"apply", "validate"} and file_plans:
+                    entry["managed_files"] = file_plans
+                if stage in {"apply", "verify"} and package_plans:
+                    entry["packages"] = package_plans
+                    entry["package_rollout"] = self.packages.rollout(package_plans) if self.packages else None
+                if stage in {"validate", "verify"} and service_plans:
+                    entry["services"] = service_plans
+                    if stage == "verify" and self.services:
+                        entry["service_outcomes"] = [self.services.evaluate(
+                            plan, [{"passed": True} for _ in plan["verification_checks"]]
+                        ) for plan in service_plans]
+                evidence.append(entry)
+                self._update(transaction_id, state="failed" if circuit_open else state,
+                             evidence=_canonical(evidence),
+                             approval_hash=None, approval_expires_at=None)
+                self._audit(transaction_id, session_id, username,
+                            f"change_{stage}_simulated", {
+                                "remote_mutation": False, "canary": rollout["canary"],
+                                "concurrency": rollout["concurrency"],
+                            })
+                if stop_after_backup and stage == "backup":
+                    break
+                if circuit_open:
+                    self._audit(transaction_id, session_id, username,
+                                "change_circuit_opened", {
+                                    "failed_host": rollout["failed_host"],
+                                    "skipped_hosts": rollout["skipped_hosts"],
+                                }, status="error")
+                    break
+        finally:
+            self._release_host_locks(transaction_id)
+        halted = rollout["circuit_breaker"] == "open"
+        self._audit(
+            transaction_id, session_id, username,
+            "change_simulation_halted" if halted else "change_simulation_completed",
+            {"actions": len(actions), "remote_mutation": False},
+            status="error" if halted else "success",
+        )
+        return self.get(transaction_id, username, session_id)
+
+    def advance(self, transaction_id: str, username: str,
+                session_id: str) -> dict[str, object]:
+        """Advance exactly one simulated stage so authority can pause between steps."""
+        row = self._owned(transaction_id, username, session_id)
+        transitions = {
+            "backed_up": ("applying", "apply"),
+            "applying": ("validating", "validate"),
+            "validating": ("activating", "activate"),
+            "activating": ("verifying", "verify"),
+        }
+        if row["state"] not in transitions:
+            raise ChangeDenied("Transaction has no stage available to advance")
+        actions = [ChangeAction.model_validate(item) for item in json.loads(row["actions"])]
+        hosts = sorted({item.host for item in actions})
+        capabilities = sorted({ACTION_CAPABILITIES[item.action] for item in actions})
+        for host in hosts:
+            for capability in capabilities:
+                if any(item.host == host and ACTION_CAPABILITIES[item.action] == capability
+                       for item in actions):
+                    self.authority.authorize(username, session_id, host, capability)
+        evidence = json.loads(row["evidence"])
+        if not evidence or "fleet_rollout" not in evidence[0]:
+            raise ChangeDenied("Backup stage evidence is missing")
+        state, stage = transitions[str(row["state"])]
+        entry: dict[str, object] = {
+            "stage": stage, "status": "simulated", "remote_mutation": False,
+            "fleet_rollout": evidence[0]["fleet_rollout"],
+            "reviewed_preview": json.loads(row["preview"] or "[]"),
+        }
+        self._acquire_host_locks(transaction_id, hosts)
+        try:
             evidence.append(entry)
-            self._update(transaction_id, state=state, evidence=_canonical(evidence),
-                         approval_hash=None, approval_expires_at=None)
+            self._update(transaction_id, state=state, evidence=_canonical(evidence))
             self._audit(transaction_id, session_id, username,
-                        f"change_{stage}_simulated", {"remote_mutation": False})
-        self._audit(transaction_id, session_id, username, "change_simulation_completed",
-                    {"actions": len(actions), "remote_mutation": False})
+                        f"change_{stage}_simulated", {
+                            "remote_mutation": False, "stepwise": True,
+                        })
+        finally:
+            self._release_host_locks(transaction_id)
         return self.get(transaction_id, username, session_id)
 
     def requires_material_approval(self, transaction_id: str, username: str,
@@ -305,8 +383,23 @@ class ChangeTransactionService:
 
     def rollback(self, transaction_id: str, username: str, session_id: str) -> dict[str, object]:
         row = self._owned(transaction_id, username, session_id)
-        if row["state"] not in {"approved", "verifying", "failed"}:
+        if row["state"] not in {
+            "approved", "backed_up", "applying", "validating", "activating",
+            "verifying", "failed",
+        }:
             raise ChangeDenied("Transaction is not eligible for rollback")
+        actions = [ChangeAction.model_validate(item) for item in json.loads(row["actions"])]
+        try:
+            for item in actions:
+                self.authority.authorize(
+                    username, session_id, item.host, ACTION_CAPABILITIES[item.action]
+                )
+        except AuthorityDenied as error:
+            self._audit(transaction_id, session_id, username,
+                        "change_rollback_denied", {
+                            "reason": str(error), "state": row["state"],
+                        }, status="denied")
+            raise
         evidence = json.loads(row["evidence"])
         restored = self.recovery.restore(transaction_id, username, session_id)
         evidence.append({"stage": "rollback", "status": "simulated",
@@ -319,7 +412,7 @@ class ChangeTransactionService:
 
     def cancel(self, transaction_id: str, username: str, session_id: str) -> dict[str, object]:
         row = self._owned(transaction_id, username, session_id)
-        if row["state"] in TERMINAL_STATES or row["state"] == "verifying":
+        if row["state"] not in {"planned", "previewed", "approved"}:
             raise ChangeDenied("Transaction can no longer be cancelled")
         self._update(transaction_id, state="cancelled", approval_hash=None, approval_expires_at=None)
         self._audit(transaction_id, session_id, username, "change_plan_cancelled", {})
@@ -361,13 +454,36 @@ class ChangeTransactionService:
             )
 
     def _audit(self, transaction_id: str, session_id: str, username: str,
-               event: str, parameters: Mapping[str, object]) -> None:
+               event: str, parameters: Mapping[str, object],
+               status: str = "success") -> None:
         self.audit.append(AuditEvent(
             request_id=str(uuid4()), session_id=session_id, target_host="change-plan",
             tool_name=event, parameters={"transaction_id": transaction_id,
                                          "operator": username, **parameters},
-            command=(), status="success",
+            command=(), status=status,
         ))
+
+    def _acquire_host_locks(self, transaction_id: str, hosts: Sequence[str]) -> None:
+        now = self._utc_now()
+        expires = now + ROLLOUT_TIMEOUT
+        with self._connect() as db:
+            db.execute("DELETE FROM change_host_locks WHERE expires_at<=?", (now.isoformat(),))
+            locked = db.execute(
+                f"SELECT host FROM change_host_locks WHERE host IN ({','.join('?' for _ in hosts)})",
+                tuple(hosts),
+            ).fetchall()
+            if locked:
+                raise ChangeDenied(
+                    f"Host is locked by another transaction: {locked[0]['host']}"
+                )
+            db.executemany(
+                "INSERT INTO change_host_locks(host,transaction_id,acquired_at,expires_at) VALUES (?,?,?,?)",
+                [(host, transaction_id, now.isoformat(), expires.isoformat()) for host in hosts],
+            )
+
+    def _release_host_locks(self, transaction_id: str) -> None:
+        with self._connect() as db:
+            db.execute("DELETE FROM change_host_locks WHERE transaction_id=?", (transaction_id,))
 
     def _utc_now(self) -> datetime:
         value = self._now()
@@ -428,6 +544,44 @@ def _canonical(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
+def _rollout(hosts: Sequence[str], concurrency: int,
+             outcomes: Mapping[str, bool] | None = None) -> dict[str, object]:
+    ordered = sorted(set(hosts))
+    bounded = max(1, min(3, concurrency, len(ordered)))
+    waves = [[ordered[0]]]
+    waves.extend(
+        ordered[index:index + bounded]
+        for index in range(1, len(ordered), bounded)
+    )
+    results = outcomes or {}
+    circuit_open = False
+    failed_host: str | None = None
+    host_states = []
+    skipped_hosts = []
+    for wave_index, wave in enumerate(waves):
+        for host in wave:
+            if circuit_open:
+                state = "skipped_circuit_open"
+                skipped_hosts.append(host)
+            elif results.get(host, True):
+                state = "simulated_complete"
+            else:
+                state = "simulated_failed"
+                failed_host = host
+                circuit_open = True
+            host_states.append({
+                "host": host, "wave": wave_index, "state": state,
+                "lock": "acquired_and_released",
+            })
+    return {
+        "canary": ordered[0], "concurrency": bounded,
+        "timeout_seconds": int(ROLLOUT_TIMEOUT.total_seconds()),
+        "circuit_breaker": "open" if circuit_open else "closed", "waves": waves,
+        "failed_host": failed_host, "skipped_hosts": skipped_hosts,
+        "hosts": host_states,
+    }
+
+
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -439,6 +593,7 @@ def _public(row: Mapping[str, object]) -> dict[str, object]:
         "actions": json.loads(str(row["actions"])), "plan_hash": row["plan_hash"],
         "preview": json.loads(str(row["preview"])) if row["preview"] else None,
         "diff_hash": row["diff_hash"],
+        "approval_owner": row["username"] if row["state"] == "approved" else None,
         "approval_expires_at": row["approval_expires_at"],
         "rollback_available": row["state"] in {"approved", "verifying", "failed"},
         "evidence": json.loads(str(row["evidence"])),

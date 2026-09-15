@@ -181,6 +181,11 @@ class ChangeSkipHostRequest(BaseModel):
     host: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
+class ChangeAdvanceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    activation_password: str | None = Field(default=None, min_length=1, max_length=256)
+
+
 TOOLS: list[dict[str, Any]] = [
     {"type": "function", "name": "check_ports", "description": "List listening TCP/UDP ports.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}}, "required": ["host"], "additionalProperties": False}, "strict": True},
     {"type": "function", "name": "check_services", "description": "List systemd services, optionally by state.", "parameters": {"type": "object", "properties": {"host": {"type": "string"}, "state_filter": {"type": ["string", "null"], "enum": ["active", "inactive", "failed", None]}}, "required": ["host", "state_filter"], "additionalProperties": False}, "strict": True},
@@ -678,6 +683,40 @@ def create_app(
                                     session.username, session.session_id)
         except (ChangeDenied, AuthorityDenied, RecoveryDenied, ManagedFileDenied,
                 PackageDenied, ServiceDenied) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/changes/{transaction_id}/start")
+    async def change_start(transaction_id: str, body: ChangeSimulateRequest,
+                           request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        try:
+            return changes.simulate(
+                transaction_id, body.approval_token, session.username,
+                session.session_id, stop_after_backup=True,
+            )
+        except (ChangeDenied, AuthorityDenied, RecoveryDenied, ManagedFileDenied,
+                PackageDenied, ServiceDenied) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/changes/{transaction_id}/advance")
+    async def change_advance(transaction_id: str, body: ChangeAdvanceRequest,
+                             request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        try:
+            current = changes.get(transaction_id, session.username, session.session_id)
+            material = any(
+                item.get("service", {}).get("material_approval_required")
+                for item in current.get("preview") or []
+            )
+            if current["state"] == "validating" and material and (
+                not body.activation_password
+                or not auth.verify_password(session.username, body.activation_password)
+            ):
+                raise HTTPException(
+                    401, "Material service activation requires fresh reauthentication"
+                )
+            return changes.advance(transaction_id, session.username, session.session_id)
+        except (ChangeDenied, AuthorityDenied) as error:
             raise HTTPException(400, str(error)) from error
 
     @app.post("/api/changes/{transaction_id}/accept")

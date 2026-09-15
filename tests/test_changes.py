@@ -54,11 +54,13 @@ def test_transaction_is_deterministic_single_use_and_never_mutates_remote(tmp_pa
     second = changes.preview(created["id"], "admin", "session-a")
     assert first["diff_hash"] == second["diff_hash"]
     approved = changes.approve(created["id"], "admin", "session-a")
+    assert approved["approval_owner"] == "admin"
     assert approved["approval_expires_at"] is not None
     assert approved["rollback_available"] is True
     result = changes.simulate(created["id"], approved["approval_token"], "admin", "session-a")
     assert result["state"] == "verifying"
     assert result["approval_expires_at"] is None
+    assert result["approval_owner"] is None
     assert result["rollback_available"] is True
     assert all(event["remote_mutation"] is False for event in result["evidence"])
     assert authority.current()["actions_used"] == 1
@@ -197,6 +199,120 @@ def test_skip_host_rejects_unknown_only_or_started_host(tmp_path):
     changes.simulate(created["id"], approved["approval_token"], "admin", "session-a")
     with pytest.raises(ChangeDenied, match="before execution"):
         changes.skip_host(created["id"], "admin", "session-a", "lab")
+
+
+def test_multi_host_simulation_records_canary_waves_limits_and_releases_locks(tmp_path):
+    audit = SQLiteAuditLog(tmp_path / "audit.db")
+    second = replace(host(), name="lab-b", hostname="192.0.2.11")
+    hosts = {"lab": host(), "lab-b": second}
+    authority = AuthorityService(hosts, audit)
+    authority.arm(
+        mode="guided", username="admin", session_id="session-a",
+        hosts=["lab", "lab-b"], capabilities=["services"],
+        duration_minutes=15, action_budget=5, concurrency=2,
+    )
+    changes = ChangeTransactionService(
+        audit.path, authority, audit, services=ServicePlanner(hosts)
+    )
+    actions = [
+        ChangeAction(action="restart_service", host="lab-b", target="nginx"),
+        ChangeAction(action="restart_service", host="lab", target="nginx"),
+    ]
+    created = changes.create("admin", "session-a", "Fleet restart", actions)
+    changes.preview(created["id"], "admin", "session-a")
+    approved = changes.approve(created["id"], "admin", "session-a")
+    result = changes.simulate(
+        created["id"], approved["approval_token"], "admin", "session-a"
+    )
+
+    rollout = result["evidence"][-1]["fleet_rollout"]
+    assert rollout["canary"] == "lab"
+    assert rollout["waves"] == [["lab"], ["lab-b"]]
+    assert rollout["concurrency"] == 2
+    assert rollout["timeout_seconds"] == 60
+    assert rollout["circuit_breaker"] == "closed"
+    with changes._connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM change_host_locks").fetchone()[0] == 0
+
+
+def test_live_host_lock_blocks_overlapping_transaction(tmp_path):
+    _, changes = services(tmp_path)
+    now = changes._utc_now()
+    with changes._connect() as db:
+        db.execute(
+            "INSERT INTO change_host_locks(host,transaction_id,acquired_at,expires_at) VALUES (?,?,?,?)",
+            ("lab", "other", now.isoformat(), (now + timedelta(seconds=60)).isoformat()),
+        )
+    with pytest.raises(ChangeDenied, match="locked"):
+        changes._acquire_host_locks("current", ["lab"])
+
+
+def test_canary_failure_opens_circuit_and_skips_later_waves(tmp_path):
+    audit = SQLiteAuditLog(tmp_path / "audit.db")
+    second = replace(host(), name="lab-b", hostname="192.0.2.11")
+    hosts = {"lab": host(), "lab-b": second}
+    authority = AuthorityService(hosts, audit)
+    authority.arm(
+        mode="guided", username="admin", session_id="session-a",
+        hosts=["lab", "lab-b"], capabilities=["services"],
+        duration_minutes=15, action_budget=5, concurrency=1,
+    )
+    changes = ChangeTransactionService(
+        audit.path, authority, audit, services=ServicePlanner(hosts)
+    )
+    actions = [
+        ChangeAction(action="restart_service", host="lab", target="nginx"),
+        ChangeAction(action="restart_service", host="lab-b", target="nginx"),
+    ]
+    created = changes.create("admin", "session-a", "Fleet restart", actions)
+    changes.preview(created["id"], "admin", "session-a")
+    approved = changes.approve(created["id"], "admin", "session-a")
+    result = changes.simulate(
+        created["id"], approved["approval_token"], "admin", "session-a",
+        simulated_host_outcomes={"lab": False},
+    )
+
+    assert result["state"] == "failed"
+    rollout = result["evidence"][-1]["fleet_rollout"]
+    assert rollout["circuit_breaker"] == "open"
+    assert rollout["failed_host"] == "lab"
+    assert rollout["skipped_hosts"] == ["lab-b"]
+    assert [item["state"] for item in rollout["hosts"]] == [
+        "simulated_failed", "skipped_circuit_open"
+    ]
+    assert [item["stage"] for item in result["evidence"]] == ["backup", "apply"]
+    assert result["rollback_available"] is True
+
+
+def test_stepwise_simulation_advances_exactly_one_stage_at_a_time(tmp_path):
+    authority, changes = services(tmp_path)
+    action = ChangeAction(action="restart_service", host="lab", target="nginx")
+    created = changes.create("admin", "session-a", "Stepwise restart", [action])
+    changes.preview(created["id"], "admin", "session-a")
+    approved = changes.approve(created["id"], "admin", "session-a")
+
+    current = changes.simulate(
+        created["id"], approved["approval_token"], "admin", "session-a",
+        stop_after_backup=True,
+    )
+    assert current["state"] == "backed_up"
+    assert [item["stage"] for item in current["evidence"]] == ["backup"]
+
+    authority.pause("admin", "session-a")
+    with pytest.raises(AuthorityDenied, match="not active"):
+        changes.advance(created["id"], "admin", "session-a")
+    authority.resume("admin", "session-a")
+
+    expected = [
+        ("applying", "apply"), ("validating", "validate"),
+        ("activating", "activate"), ("verifying", "verify"),
+    ]
+    for state, stage in expected:
+        current = changes.advance(created["id"], "admin", "session-a")
+        assert current["state"] == state
+        assert current["evidence"][-1]["stage"] == stage
+    with pytest.raises(ChangeDenied, match="no stage"):
+        changes.advance(created["id"], "admin", "session-a")
 
 
 def test_managed_file_backup_precedes_approval_and_incomplete_diff_cannot_pass(tmp_path):

@@ -107,6 +107,7 @@ def test_api_does_not_expose_credentials(tmp_path: Path):
         "/api/changes/{transaction_id}/rollback", "/api/changes/{transaction_id}/cancel",
         "/api/changes/{transaction_id}/revise"
         , "/api/changes/{transaction_id}/skip-host"
+        , "/api/changes/{transaction_id}/start", "/api/changes/{transaction_id}/advance"
     }
 
 

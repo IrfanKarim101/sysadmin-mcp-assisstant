@@ -6,7 +6,7 @@ bolted on at the end.
 
 ## Current project status
 
-**Current phase:** Phase 21 — Supervised Automation UI & Fleet Controls
+**Current phase:** Phase 22 — Adversarial Validation & Lab Release
 
 Status meanings: **Complete** means the phase's current scoped deliverable and
 exit criteria are implemented; **Partial** means useful work exists but one or
@@ -36,8 +36,8 @@ phase currently being implemented; **Planned** has not started.
 | 18 — Managed File Automation | Complete | Safe managed-file planning and simulated atomic replacement are implemented. |
 | 19 — Package Lifecycle Automation | Complete | Allowlisted APT planning, canary controls, and simulated verification are implemented. |
 | 20 — Service Configuration & Lifecycle | Complete | Typed lifecycle planning, validation gates, health verification, and rollback decisions are implemented. |
-| 21 — Supervised Automation UI & Fleet Controls | **Active** | Next implementation phase. |
-| 22 — Adversarial Validation & Lab Release | Planned | Begins after Phase 21 exit criteria are met. |
+| 21 — Supervised Automation UI & Fleet Controls | Complete | Stepwise supervised workflows, fleet controls, raw evidence, and interruption controls are implemented. |
+| 22 — Adversarial Validation & Lab Release | **Active** | Current implementation phase. |
 
 ---
 
@@ -534,19 +534,19 @@ password confirmation immediately before activation simulation.
 
 ## Phase 21 — Supervised Automation UI & Fleet Controls
 
-**Status:** Active
+**Status:** Complete
 
 **Goal:** Make long-running automation understandable and interruptible.
 
-- [~] Build a change workspace showing Inspect, Plan, Preview, Backup, Apply,
+- [x] Build a change workspace showing Inspect, Plan, Preview, Backup, Apply,
       Validate, Activate, Verify, and Rollback as live states.
-- [~] Show raw evidence, structured actions, diffs, approval owner/expiry,
+- [x] Show raw evidence, structured actions, diffs, approval owner/expiry,
       progress, per-host state, and rollback availability.
-- [~] Add approve, reject, edit plan, pause, resume, skip-unstarted-host,
+- [x] Add approve, reject, edit plan, pause, resume, skip-unstarted-host,
       rollback, and emergency-stop controls with role checks.
-- [ ] Use canary-first fleet rollout, bounded concurrency, per-host locks,
+- [x] Use canary-first fleet rollout, bounded concurrency, per-host locks,
       action budgets, timeouts, and circuit breakers.
-- [ ] Never hide failure evidence behind an LLM summary or a completed indicator.
+- [x] Never hide failure evidence behind an LLM summary or a completed indicator.
 
 **Human checkpoints:** The operator remains present at every crucial gate and can
 halt the workflow at any time. Low-risk steps may auto-continue only when they
@@ -555,24 +555,36 @@ were included in the exact approved plan.
 **Exit criteria:** An operator can watch, validate, pause, approve, and roll back
 a multi-step lab change without losing the raw state of any host.
 
+**Implemented so far:** The workspace polls transaction state and shows the full
+stage timeline, immutable plan/diff identifiers, approval expiry, per-host state,
+rollback availability, and expandable raw evidence. Operators can approve,
+reject, revise, and skip an unstarted host; revisions and host skips create a new
+transaction and invalidate prior approval. Simulated fleet execution selects a
+deterministic canary, uses the armed bounded concurrency, records rollout waves,
+holds expiring per-host locks, and opens the circuit on a failed host so later
+waves are explicitly skipped. The UI now advances Backup, Apply, Validate,
+Activate, and Verify one server-persisted stage at a time; the global authority
+pause prevents advancement until the owning operator resumes it, and material
+activation reauthentication occurs immediately before Activate.
+
 ---
 
 ## Phase 22 — Adversarial Validation & Lab Release
 
-**Status:** Planned
+**Status:** Active
 
 **Goal:** Prove the supervised automation boundary before broader testing.
 
-- [ ] Test prompt injection in logs, files, package metadata, model responses,
+- [~] Test prompt injection in logs, files, package metadata, model responses,
       and validation output.
-- [ ] Test path/symlink races, command injection shapes, oversized plans/diffs,
+- [~] Test path/symlink races, command injection shapes, oversized plans/diffs,
       approval replay, cross-user/session/host use, stale-plan approval, and
       state-machine bypass.
-- [ ] Test disconnects and process crashes during backup, apply, validation,
+- [~] Test disconnects and process crashes during backup, apply, validation,
       restart, verification, and rollback.
-- [ ] Verify production classification is fail-closed at UI, API, policy,
+- [~] Verify production classification is fail-closed at UI, API, policy,
       transport identity, and host-side helper layers.
-- [ ] Conduct recovery drills and document residual risks and non-rollbackable
+- [~] Conduct recovery drills and document residual risks and non-rollbackable
       package operations.
 
 **Human checkpoint:** A named operator signs off on the evidence for each failure
@@ -581,3 +593,12 @@ scenario and explicitly authorizes release to disposable lab hosts.
 **Exit criteria:** Written security and recovery reports demonstrate that the LLM
 cannot create authority, crucial steps cannot bypass human validation, and all
 mutations remain typed, bounded, audited, recoverable, and limited to test hosts.
+
+**Implemented so far:** Automated adversarial coverage verifies inert prompt
+injection data, approval replay and cross-user/session denial, stale-plan
+invalidation, state-machine ordering, production Autonomous Lab denial, live and
+expired host locks, and fail-closed restart behavior. Recovery drills cover
+interruption after every persisted stage and require explicit authority rearm
+before rollback. Security, recovery, and package rollback limitation reports are
+maintained under `docs/`. Disposable-VM helper testing and named operator sign-off
+remain outstanding.
