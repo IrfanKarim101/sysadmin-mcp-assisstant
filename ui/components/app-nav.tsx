@@ -1,7 +1,8 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import {
   DatabaseBackup,
   History,
@@ -33,7 +34,12 @@ const links = [
   ['/account', 'Account', UserRound],
 ] as const;
 
+const subscribe = () => () => {};
+const clientSnapshot = () => true;
+const serverSnapshot = () => false;
+
 export function AppNav() {
+  const mounted = useSyncExternalStore(subscribe, clientSnapshot, serverSnapshot);
   const path = usePathname(),
     [open, setOpen] = useState(false);
   async function logout() {
@@ -48,6 +54,8 @@ export function AppNav() {
   }
   return (
     <>
+      <span className="sentinel-nav-anchor" hidden />
+      {mounted && createPortal(<>
       <Button
         type="button"
         variant="outline"
@@ -67,7 +75,7 @@ export function AppNav() {
         />
       )}
       <aside
-        className={`sentinel-drawer fixed inset-y-0 left-0 z-50 flex w-60 flex-col border-r border-border bg-card/95 p-4 backdrop-blur transition-transform md:translate-x-0 ${open ? 'translate-x-0' : '-translate-x-full'}`}
+        className={`sentinel-drawer fixed inset-y-0 left-0 z-50 flex w-60 flex-col overflow-y-auto border-r border-border bg-card/95 p-4 backdrop-blur transition-transform md:translate-x-0 ${open ? 'translate-x-0' : '-translate-x-full'}`}
       >
         <div className="flex items-center gap-3 border-b border-border pb-4">
           <div className="grid size-9 place-items-center rounded-xl bg-emerald-400/10 text-emerald-300">
@@ -123,6 +131,7 @@ export function AppNav() {
           </p>
         </div>
       </aside>
+      </>, document.body)}
     </>
   );
 }

@@ -7,7 +7,7 @@ import sqlite3
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid5
 
 MAX_CHAT_MESSAGES = 1_000
 MAX_CONTENT_CHARS = 32_000
@@ -50,6 +50,37 @@ class SQLiteChatStore:
         with self._connect() as connection:
             self._migrate_provider_constraint(connection)
             connection.executescript(CHAT_SCHEMA)
+            self._separate_legacy_hosts(connection)
+
+    @staticmethod
+    def _separate_legacy_hosts(connection: sqlite3.Connection) -> None:
+        """Recover old mixed conversations using the host saved on user turns."""
+        connection.execute("BEGIN IMMEDIATE")
+        sessions = connection.execute("SELECT * FROM chat_sessions").fetchall()
+        for session in sessions:
+            rows = connection.execute(
+                "SELECT id, role, metadata FROM chat_messages WHERE session_id = ? ORDER BY id",
+                (session["id"],),
+            ).fetchall()
+            current_host = session["host"]
+            for row in rows:
+                if row["role"] == "user":
+                    try:
+                        metadata = json.loads(row["metadata"])
+                    except (TypeError, ValueError):
+                        metadata = {}
+                    saved_host = metadata.get("host") if isinstance(metadata, dict) else None
+                    current_host = saved_host if isinstance(saved_host, str) and saved_host else session["host"]
+                if current_host == session["host"]:
+                    continue
+                split_id = str(uuid5(UUID(session["id"]), current_host))
+                connection.execute(
+                    "INSERT OR IGNORE INTO chat_sessions (id, created_at, updated_at, host, provider) VALUES (?, ?, ?, ?, ?)",
+                    (split_id, session["created_at"], session["updated_at"], current_host, session["provider"]),
+                )
+                connection.execute(
+                    "UPDATE chat_messages SET session_id = ? WHERE id = ?", (split_id, row["id"])
+                )
 
     @staticmethod
     def _migrate_provider_constraint(connection: sqlite3.Connection) -> None:
@@ -92,10 +123,16 @@ class SQLiteChatStore:
         _validate_session_id(session_id)
         timestamp = datetime.now(UTC).isoformat()
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT host FROM chat_sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            if existing is not None and existing["host"] != host:
+                raise ValueError("This conversation belongs to another VM. Start a new chat.")
             connection.execute(
                 """INSERT INTO chat_sessions (id, created_at, updated_at, host, provider)
                 VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET
-                updated_at = excluded.updated_at, host = excluded.host,
+                updated_at = excluded.updated_at,
                 provider = excluded.provider""",
                 (session_id, timestamp, timestamp, host, provider),
             )
@@ -122,7 +159,7 @@ class SQLiteChatStore:
                 (session_id, timestamp, role, content, encoded_metadata),
             )
 
-    def messages(self, session_id: str, limit: int = 200) -> list[dict[str, object]]:
+    def messages(self, session_id: str, limit: int = 200, host: str | None = None) -> list[dict[str, object]]:
         _validate_session_id(session_id)
         if (
             isinstance(limit, bool)
@@ -131,6 +168,10 @@ class SQLiteChatStore:
         ):
             raise ValueError("chat limit must be between 1 and 1000")
         with self._connect() as connection:
+            if host is not None:
+                owner = connection.execute("SELECT host FROM chat_sessions WHERE id = ?", (session_id,)).fetchone()
+                if owner is not None and owner["host"] != host:
+                    raise ValueError("This conversation belongs to another VM.")
             rows = connection.execute(
                 """SELECT * FROM (
                     SELECT * FROM chat_messages WHERE session_id = ?
@@ -140,7 +181,7 @@ class SQLiteChatStore:
             ).fetchall()
         return [asdict(ChatMessage(**dict(row))) for row in rows]
 
-    def sessions(self, limit: int = 100) -> list[dict[str, object]]:
+    def sessions(self, limit: int = 100, host: str | None = None) -> list[dict[str, object]]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
             raise ValueError("session limit must be between 1 and 200")
         with self._connect() as connection:
@@ -149,7 +190,8 @@ class SQLiteChatStore:
                   WHERE m.session_id=s.id AND m.role='user' ORDER BY m.id LIMIT 1),
                   'Untitled conversation') AS title,
                 (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id=s.id) AS message_count
-                FROM chat_sessions s ORDER BY s.updated_at DESC LIMIT ?""", (limit,)).fetchall()
+                FROM chat_sessions s WHERE (? IS NULL OR s.host = ?)
+                ORDER BY s.updated_at DESC LIMIT ?""", (host, host, limit)).fetchall()
         return [dict(row) for row in rows]
 
     def delete_session(self, session_id: str) -> bool:

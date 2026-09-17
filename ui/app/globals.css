@@ -7,9 +7,41 @@
 }
 
 @media (min-width: 768px) {
-  main:has(.sentinel-drawer) {
+  main:has(.sentinel-nav-anchor) {
     padding-left: 15rem;
   }
 }
 :root { --background: oklch(.155 .012 258); --foreground: oklch(.94 .008 255); --card: oklch(.19 .014 258); --card-foreground: oklch(.94 .008 255); --primary: oklch(.33 .025 257); --primary-foreground: oklch(.97 .004 255); --secondary: oklch(.23 .014 258); --secondary-foreground: oklch(.91 .008 255); --muted: oklch(.22 .012 258); --muted-foreground: oklch(.64 .014 255); --accent: oklch(.235 .018 258); --accent-foreground: oklch(.95 .006 255); --border: oklch(.29 .016 258); --input: oklch(.31 .017 258); --ring: oklch(.72 .14 165); --sidebar: oklch(.17 .013 258); --radius: .68rem; }
 @layer base { * { @apply border-border outline-ring/50; } html { @apply bg-background font-sans; color-scheme: dark; } body { @apply bg-background text-foreground antialiased; background-image: radial-gradient(circle at 48% -20%,rgba(52,211,153,.055),transparent 38%); } ::selection { background: rgba(52,211,153,.22); } }
+
+/* Shared frosted surfaces, with opaque fallbacks when blur is unavailable. */
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  background-color: #0b1220;
+  background-image: radial-gradient(ellipse at 12% 5%, #174a493d, transparent 48%),
+    radial-gradient(ellipse at 88% 32%, #48428b40, transparent 50%),
+    radial-gradient(ellipse at 45% 95%, #124c6033, transparent 48%);
+  background-attachment: fixed;
+}
+main.min-h-screen { background-color: transparent; }
+.glass-panel, .sentinel-drawer, main > header, main .bg-card, [data-slot='card'] {
+  background: rgba(20, 31, 48, .91);
+  border-color: rgba(196, 220, 245, .14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 12px 40px rgba(0, 0, 0, .12);
+}
+@supports (backdrop-filter: blur(20px)) {
+  .glass-panel, .sentinel-drawer, main > header, main .bg-card, [data-slot='card'] {
+    background: linear-gradient(135deg, rgba(37, 54, 72, .57), rgba(15, 24, 42, .72));
+    backdrop-filter: blur(20px) saturate(125%);
+    -webkit-backdrop-filter: blur(20px) saturate(125%);
+  }
+}
+.console-shell { --muted-foreground: oklch(.75 .018 255); }
+.console-shell pre { background: rgba(6, 12, 22, .7); }
+@media (prefers-reduced-transparency: reduce) {
+  .glass-panel, .sentinel-drawer, main > header, main .bg-card, [data-slot='card'] {
+    background: #142030;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}

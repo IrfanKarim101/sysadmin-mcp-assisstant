@@ -1,5 +1,5 @@
 'use client';
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -10,6 +10,8 @@ import {
   LoaderCircle,
   LockKeyhole,
   Network,
+  Plus,
+  MessageSquare,
   Send,
   Server,
   ShieldCheck,
@@ -18,7 +20,6 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   NativeSelect,
   NativeSelectOption,
@@ -60,6 +61,7 @@ type Evt = {
   payload?: unknown;
 };
 type Turn = { role: 'user' | 'agent'; text?: string; events?: Evt[] };
+type Conversation = { id: string; title: string; host: string; provider: ProviderId };
 type SavedMessage = { role: 'user' | 'assistant'; content: string };
 type ProviderId = 'openai' | 'gemini' | 'local';
 type Provider = {
@@ -78,11 +80,12 @@ export default function Home() {
   const [provider, setProvider] = useState<ProviderId>('openai'),
     [providers, setProviders] = useState<Provider[]>([]);
   const [sessionId, setSessionId] = useState('');
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [loadingChat, setLoadingChat] = useState(false);
+  const [chatError, setChatError] = useState('');
+  const selection = useRef(0);
+  const activeChats = useRef<Record<string, string>>({});
   useEffect(() => {
-    const storedSession =
-      window.localStorage.getItem('sentinel-session-id') ?? createSessionId();
-    window.localStorage.setItem('sentinel-session-id', storedSession);
-    setSessionId(storedSession);
     apiFetch('/api/auth/me')
       .then(async (auth) => {
         if (!auth.ok) throw new Error('Authentication required');
@@ -95,33 +98,68 @@ export default function Home() {
           apiFetch('/api/providers').then(async (r) =>
             r.ok ? ((await r.json()) as Provider[]) : Promise.reject(),
           ),
-          apiFetch(`/api/chat/sessions/${storedSession}`).then(async (r) =>
-            r.ok ? ((await r.json()) as SavedMessage[]) : Promise.reject(),
-          ),
         ]);
       })
-      .then(([x, p, saved]) => {
+      .then(([x, p]) => {
         setHosts(x);
-        setHost(x[0]?.name ?? '');
         setProviders(p);
-        setTurns(
-          saved.map((item) =>
-            item.role === 'user'
-              ? { role: 'user', text: item.content }
-              : {
-                  role: 'agent',
-                  events: [{ type: 'summary', message: item.content }],
-                },
-          ),
-        );
+        const requested = new URLSearchParams(window.location.search);
+        const initialHost = x.find((item) => item.name === requested.get('host'))?.name ?? x[0]?.name ?? '';
+        if (initialHost) void selectHost(initialHost, requested.get('chat') ?? undefined);
         setOnline(true);
       })
       .catch(() => setOnline(false));
   }, []);
+  async function selectHost(nextHost: string, requestedChat?: string) {
+    const version = ++selection.current;
+    setHost(nextHost); setTurns([]); setConversations([]); setMessage('');
+    setSessionId(''); setChatError(''); setLoadingChat(true);
+    try {
+      const response = await apiFetch(`/api/chat/sessions?host=${encodeURIComponent(nextHost)}&limit=200`);
+      if (!response.ok) throw new Error('Could not load conversations for this VM.');
+      const rows = await response.json() as Conversation[];
+      if (version !== selection.current) return;
+      setConversations(rows);
+      // Only reopen a conversation explicitly selected for this VM.
+      const previous = requestedChat ?? activeChats.current[nextHost];
+      if (previous && rows.some((row) => row.id === previous)) {
+        await openChat(previous, nextHost, version);
+      } else {
+        const id = createSessionId();
+        activeChats.current[nextHost] = id;
+        setSessionId(id);
+      }
+    } catch (error) {
+      if (version === selection.current) setChatError(error instanceof Error ? error.message : 'Could not load chats.');
+    } finally { if (version === selection.current) setLoadingChat(false); }
+  }
+  async function openChat(id: string, targetHost = host, version = ++selection.current) {
+    setLoadingChat(true); setChatError(''); setTurns([]); setSessionId('');
+    try {
+      const response = await apiFetch(`/api/chat/sessions/${id}?host=${encodeURIComponent(targetHost)}`);
+      if (!response.ok) throw new Error('Could not open this conversation.');
+      const saved = await response.json() as SavedMessage[];
+      if (version !== selection.current) return;
+      setSessionId(id);
+      activeChats.current[targetHost] = id;
+      setTurns(saved.map((item) => item.role === 'user'
+        ? { role: 'user', text: item.content }
+        : { role: 'agent', events: [{ type: 'summary', message: item.content }] }));
+    } catch (error) {
+      if (version === selection.current) setChatError(error instanceof Error ? error.message : 'Could not load chat.');
+    } finally { if (version === selection.current) setLoadingChat(false); }
+  }
+  function newChat() {
+    ++selection.current;
+    const id = createSessionId();
+    activeChats.current[host] = id;
+    setSessionId(id); setTurns([]); setMessage(''); setChatError(''); setLoadingChat(false);
+  }
   async function submit(e: FormEvent) {
     e.preventDefault();
     const prompt = message.trim();
-    if (!prompt || !host || running) return;
+    if (!prompt || !host || !sessionId || running || loadingChat) return;
+    setConversations((rows) => rows.some((row) => row.id === sessionId) ? rows : [{ id: sessionId, host, provider, title: prompt }, ...rows]);
     setMessage('');
     setRunning(true);
     setTurns((x) => [
@@ -156,10 +194,6 @@ export default function Home() {
             if (item.type === 'session') {
               if (item.session_id) {
                 setSessionId(item.session_id);
-                window.localStorage.setItem(
-                  'sentinel-session-id',
-                  item.session_id,
-                );
               }
               continue;
             }
@@ -170,7 +204,7 @@ export default function Home() {
               );
               continue;
             }
-            if (item.type === 'done') setRunning(false);
+
             setTurns((x) => [
               ...x.slice(0, -1),
               { role: 'agent', events: [...(x.at(-1)?.events ?? []), item] },
@@ -193,8 +227,8 @@ export default function Home() {
   const selected = hosts.find((x) => x.name === host),
     latest = turns.filter((x) => x.role === 'agent').at(-1)?.events ?? [];
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <header className="flex h-16 items-center justify-between border-b border-border bg-card/70 px-6">
+    <main className="console-shell min-h-screen text-foreground">
+      <header className="glass-panel flex min-h-20 flex-wrap items-center justify-between gap-3 border-b px-4 py-3 pl-16 md:pl-6">
         <div className="flex items-center gap-3">
           <div className="grid size-9 place-items-center rounded-xl bg-emerald-400/10 text-emerald-300">
             <TerminalSquare className="size-4" />
@@ -218,7 +252,9 @@ export default function Home() {
           {online ? 'Agent connected' : 'Agent offline'}
           <NativeSelect
             value={host}
-            onChange={(e) => setHost(e.target.value)}
+            aria-label="Selected VM"
+            disabled={running}
+            onChange={(e) => void selectHost(e.target.value)}
             className="w-44"
           >
             {hosts.map((x) => (
@@ -230,8 +266,8 @@ export default function Home() {
           <AppNav />
         </div>
       </header>
-      <div className="grid min-h-[calc(100vh-4rem)] lg:grid-cols-[220px_minmax(0,1fr)_280px]">
-        <aside className="hidden border-r border-border p-4 lg:flex lg:flex-col">
+      <div className="grid min-h-[calc(100vh-4rem)] lg:grid-cols-[220px_minmax(0,1fr)] 2xl:grid-cols-[220px_minmax(0,1fr)_260px]">
+        <aside className="glass-panel hidden border-r border-border p-4 lg:flex lg:flex-col">
           <p className="px-2 pb-3 text-[10px] uppercase tracking-[.18em] text-muted-foreground">
             Diagnostics
           </p>
@@ -250,12 +286,23 @@ export default function Home() {
               <ShieldCheck className="size-4 text-emerald-300" />
               Policy enforced
             </b>
-            Six fixed tools. Bounded, allowlisted, audited.
-            <p className="mt-2 text-emerald-300">Chat history saved locally</p>
+            Bounded diagnostics. Allowlisted and audited.
+            <p className="mt-2 text-emerald-300">Separate conversations for each VM</p>
           </div>
         </aside>
         <section className="flex min-w-0 flex-col">
-          <ScrollArea className="h-[calc(100vh-13.5rem)] min-h-[470px]">
+          <div className="glass-panel flex flex-wrap items-center gap-3 border-b p-4">
+            <div className="mr-auto"><p className="text-[10px] uppercase tracking-[.2em] text-emerald-300">VM workspace</p><h1 className="font-semibold">{host || 'Choose a VM'}</h1></div>
+            <MessageSquare className="size-4 text-emerald-300" aria-hidden="true" />
+            <NativeSelect aria-label="Conversation for selected VM" value={conversations.some((row) => row.id === sessionId) ? sessionId : ''} disabled={running || loadingChat || !host} onChange={(event) => event.target.value ? void openChat(event.target.value) : newChat()} className="max-w-64">
+              <NativeSelectOption value="">New conversation</NativeSelectOption>
+              {conversations.map((row) => <NativeSelectOption key={row.id} value={row.id}>{row.title.slice(0, 70)}</NativeSelectOption>)}
+            </NativeSelect>
+            <Button onClick={newChat} disabled={running || loadingChat || !host} variant="outline"><Plus />New chat</Button>
+          </div>
+          {chatError && <p role="alert" className="px-6 py-3 text-sm text-red-200">{chatError}</p>}
+          {loadingChat && <p role="status" className="px-6 py-3 text-sm text-muted-foreground">Loading conversation…</p>}
+          <ScrollArea className="h-[calc(100vh-20rem)] min-h-[470px]">
             <div className="mx-auto max-w-4xl space-y-7 px-6 py-8">
               <Bubble>
                 Ready to inspect{' '}
@@ -282,7 +329,7 @@ export default function Home() {
           <div className="border-t border-border p-4">
             <form
               onSubmit={submit}
-              className="mx-auto max-w-4xl rounded-2xl border border-border bg-card/80 p-2"
+              className="mx-auto max-w-4xl glass-panel rounded-2xl border border-border p-2"
             >
               <div
                 className="flex items-center gap-1 px-1 pb-1"
@@ -341,7 +388,7 @@ export default function Home() {
                 </span>
                 <Button
                   type="submit"
-                  disabled={!online || !message.trim() || running}
+                  disabled={!online || !host || !sessionId || !message.trim() || running || loadingChat}
                   className="bg-emerald-400 text-emerald-950"
                 >
                   {running ? (
@@ -357,7 +404,7 @@ export default function Home() {
             </form>
           </div>
         </section>
-        <aside className="hidden border-l border-border p-4 xl:block">
+        <aside className="glass-panel hidden border-l border-border p-4 2xl:block">
           <h2 className="mb-4 flex gap-2 text-xs font-semibold">
             <Activity className="size-4" />
             Live activity
@@ -412,7 +459,7 @@ function Bubble({ children }: { children: React.ReactNode }) {
       <div className="grid size-8 shrink-0 place-items-center rounded-lg border border-border text-emerald-300">
         <Bot className="size-4" />
       </div>
-      <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-border bg-card/75 p-4 text-sm leading-6">
+      <div className="min-w-0 flex-1 glass-panel rounded-2xl rounded-tl-sm border border-border p-4 text-sm leading-6">
         {children}
       </div>
     </div>

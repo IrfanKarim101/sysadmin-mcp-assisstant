@@ -14,6 +14,15 @@ use an HttpOnly cookie, CSRF protection, a 30-minute idle timeout, and an
 8-hour maximum lifetime. The top navigation provides separate **Console** and
 searchable **History** views plus explicit sign-out.
 
+Conversations are scoped to one VM. Select a VM in Console, choose one of its
+saved conversations, or use **New chat** for a fresh conversation (saved with
+the first message). History includes a VM filter and **Continue this chat**.
+Switching VMs cannot reuse a conversation belonging to another VM. On backend
+startup, older mixed conversations are separated using the host metadata on
+user messages, retaining their following replies and message order. Messages
+without host metadata retain their recorded session host. The console uses
+frosted glass surfaces with an opaque fallback for reduced transparency.
+
 ## Current status
 
 Phase 1's executor policy and typed MCP adapter are implemented. `ReadOnlyCommandPolicy` builds a

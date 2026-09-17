@@ -60,3 +60,44 @@ def test_history_can_be_deleted_individually_or_all_at_once(tmp_path: Path):
     assert store.messages(first) == []
     assert store.delete_all() == 1
     assert store.sessions() == []
+
+
+def test_conversation_cannot_move_between_vms(tmp_path: Path):
+    store = SQLiteChatStore(tmp_path / "chat.db")
+    session = str(uuid4())
+    store.ensure_session(session, "vm-a", "openai")
+    store.append(session, "user", "Only VM A")
+    with pytest.raises(ValueError, match="another VM"):
+        store.ensure_session(session, "vm-b", "gemini")
+    assert store.sessions()[0]["host"] == "vm-a"
+    assert store.sessions()[0]["provider"] == "openai"
+    with pytest.raises(ValueError, match="another VM"):
+        store.messages(session, host="vm-b")
+    assert store.messages(session, host="vm-a")[0]["content"] == "Only VM A"
+
+
+def test_vm_filter_applies_before_limit_and_supports_multiple_chats(tmp_path: Path):
+    store = SQLiteChatStore(tmp_path / "chat.db")
+    first, second, other = (str(uuid4()) for _ in range(3))
+    for session, host in [(first, "vm-a"), (second, "vm-a"), (other, "vm-b")]:
+        store.ensure_session(session, host, "local")
+    assert {row["id"] for row in store.sessions(host="vm-a")} == {first, second}
+    assert len(store.sessions(limit=1, host="vm-a")) == 1
+    assert store.sessions(host="missing") == []
+    store.ensure_session(first, "vm-a", "gemini")
+    assert store.sessions(host="vm-a")[0]["provider"] == "gemini"
+
+
+def test_legacy_mixed_history_is_split_without_losing_messages(tmp_path: Path):
+    store = SQLiteChatStore(tmp_path / "chat.db")
+    session = str(uuid4())
+    store.ensure_session(session, "vm-b", "local")
+    store.append(session, "user", "A question", {"host": "vm-a"})
+    store.append(session, "assistant", "A answer")
+    store.append(session, "user", "B question", {"host": "vm-b"})
+    store.append(session, "assistant", "B answer")
+    migrated = SQLiteChatStore(store.path)
+    a = migrated.sessions(host="vm-a")[0]
+    assert [row["content"] for row in migrated.messages(a["id"])] == ["A question", "A answer"]
+    assert [row["content"] for row in migrated.messages(session)] == ["B question", "B answer"]
+    assert len(SQLiteChatStore(store.path).sessions()) == 2

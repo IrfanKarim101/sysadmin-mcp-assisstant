@@ -232,7 +232,11 @@ class AgentService:
             return
         session_id = str(request.session_id or uuid4())
         if self.chat_store is not None:
-            self.chat_store.ensure_session(session_id, request.host, request.provider)
+            try:
+                self.chat_store.ensure_session(session_id, request.host, request.provider)
+            except ValueError as error:
+                yield _event("error", message=str(error))
+                return
             self.chat_store.append(
                 session_id,
                 "user",
@@ -1000,16 +1004,19 @@ def create_app(
         return [row.__dict__ for row in audit.recent(min(max(limit, 1), 100))]
 
     @app.get("/api/chat/sessions/{session_id}")
-    async def chat_messages(session_id: UUID, limit: int = 200) -> list[dict[str, object]]:
+    async def chat_messages(session_id: UUID, limit: int = 200, host: str | None = None) -> list[dict[str, object]]:
         if service.chat_store is None:
             return []
-        return service.chat_store.messages(str(session_id), min(max(limit, 1), 1_000))
+        try:
+            return service.chat_store.messages(str(session_id), min(max(limit, 1), 1_000), host=host)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from error
 
     @app.get("/api/chat/sessions")
-    async def chat_sessions(limit: int = 100) -> list[dict[str, object]]:
+    async def chat_sessions(limit: int = 100, host: str | None = None) -> list[dict[str, object]]:
         if service.chat_store is None:
             return []
-        return service.chat_store.sessions(min(max(limit, 1), 200))
+        return service.chat_store.sessions(min(max(limit, 1), 200), host=host)
 
     @app.delete("/api/chat/sessions/{session_id}")
     async def delete_chat_session(session_id: UUID) -> dict[str, object]:

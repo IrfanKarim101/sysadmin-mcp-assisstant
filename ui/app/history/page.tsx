@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -17,6 +19,7 @@ export default function HistoryPage() {
   const [selected, setSelected] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [query, setQuery] = useState('');
+  const [host, setHost] = useState('');
   const [error, setError] = useState('');
   const [deleting, setDeleting] = useState(false);
 
@@ -29,17 +32,25 @@ export default function HistoryPage() {
       if (!history.ok) throw new Error('Could not load saved conversations.');
       const rows = await history.json() as Session[];
       setSessions(rows);
-      setSelected(rows[0]?.id ?? '');
+      const initialHost = rows[0]?.host ?? '';
+      setHost(initialHost);
+      setSelected(rows.find((row) => row.host === initialHost)?.id ?? '');
     }).catch(() => setError('The local agent API is offline. Start the backend and try again.'));
   }, []);
 
   useEffect(() => {
-    if (!selected) { setMessages([]); return; }
-    void apiFetch(`/api/chat/sessions/${selected}`)
-      .then(async (response) => response.ok ? await response.json() as Message[] : [])
-      .then(setMessages)
-      .catch(() => setError('Could not load this conversation.'));
-  }, [selected]);
+    let current = true;
+    setMessages([]);
+    if (!selected) return;
+    void apiFetch(`/api/chat/sessions/${selected}?host=${encodeURIComponent(host)}`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error('Could not load this conversation.');
+        return await response.json() as Message[];
+      })
+      .then((rows) => { if (current) setMessages(rows); })
+      .catch(() => { if (current) setError('Could not load this conversation.'); });
+    return () => { current = false; };
+  }, [selected, host]);
 
   async function remove(session: Session) {
     if (!confirm(`Delete this conversation?\n\n${session.title}\n\nThis cannot be undone.`)) return;
@@ -49,7 +60,7 @@ export default function HistoryPage() {
       if (!response.ok) throw new Error('Could not delete this conversation.');
       const remaining = sessions.filter((item) => item.id !== session.id);
       setSessions(remaining);
-      if (selected === session.id) setSelected(remaining[0]?.id ?? '');
+      if (selected === session.id) setSelected(remaining.find((row) => row.host === host)?.id ?? '');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not delete this conversation.');
     } finally { setDeleting(false); }
@@ -69,22 +80,29 @@ export default function HistoryPage() {
   }
 
   const filtered = useMemo(() => sessions.filter((session) =>
-    `${session.title} ${session.host} ${session.provider}`.toLowerCase().includes(query.toLowerCase())), [sessions, query]);
+    session.host === host && `${session.title} ${session.provider}`.toLowerCase().includes(query.toLowerCase())), [sessions, query, host]);
 
   return <main className="min-h-screen bg-background text-foreground">
     <header className="flex h-16 items-center justify-between border-b px-6">
-      <div><h1 className="font-semibold">Conversation history</h1><p className="text-xs text-muted-foreground">Saved locally in SQLite</p></div>
+      <div><h1 className="font-semibold">Conversation history</h1><p className="text-xs text-muted-foreground">Conversations organized by VM</p></div>
       <div className="flex items-center gap-2"><Button variant="destructive" size="sm" disabled={!sessions.length || deleting} onClick={() => void removeAll()}><Trash2 />Delete all</Button><AppNav /></div>
     </header>
     {error && <p role="alert" className="border-b border-red-400/20 bg-red-400/10 px-6 py-3 text-sm text-red-200">{error}</p>}
     <div className="grid min-h-[calc(100vh-4rem)] md:grid-cols-[320px_1fr]">
-      <aside className="border-r p-4"><Input aria-label="Search history" placeholder="Search host or conversation…" value={query} onChange={(event) => setQuery(event.target.value)} />
+      <aside className="glass-panel border-r p-4">
+        <NativeSelect aria-label="Filter history by VM" value={host} onChange={(event) => { const next = event.target.value; setHost(next); setSelected(sessions.find((row) => row.host === next)?.id ?? ''); setMessages([]); }} className="mb-3 w-full">
+          {!sessions.length && <NativeSelectOption value="">No saved VMs</NativeSelectOption>}
+          {[...new Set(sessions.map((row) => row.host))].map((name) => <NativeSelectOption key={name} value={name}>{name}</NativeSelectOption>)}
+        </NativeSelect>
+        <Input aria-label="Search history" placeholder="Search host or conversation…" value={query} onChange={(event) => setQuery(event.target.value)} />
         <div className="mt-4 space-y-2">{filtered.map((session) => <div key={session.id} className={`flex rounded-xl border ${selected === session.id ? 'border-emerald-400/50 bg-emerald-400/5' : 'border-border'}`}>
           <button onClick={() => setSelected(session.id)} className="min-w-0 flex-1 p-3 text-left"><p className="truncate text-sm font-medium">{session.title}</p><p className="mt-1 text-xs text-muted-foreground">{session.host} · {session.provider} · {session.message_count} messages</p></button>
           <Button variant="ghost" size="icon" aria-label={`Delete ${session.title}`} disabled={deleting} onClick={() => void remove(session)} className="m-2 shrink-0 text-red-300"><Trash2 /></Button>
         </div>)}{!filtered.length && !error && <p className="p-3 text-sm text-muted-foreground">No saved conversations.</p>}</div>
       </aside>
-      <section className="space-y-4 p-6">{messages.map((message) => <article key={message.id} className={`max-w-3xl rounded-2xl p-4 ${message.role === 'user' ? 'ml-auto bg-primary' : 'border bg-card'}`}><p className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground">{message.role}</p><div className="prose prose-invert max-w-none text-sm"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div></article>)}</section>
+      <section className="space-y-4 p-6">
+        {selected && <Link className="inline-flex rounded-xl border border-emerald-300/30 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-200 hover:bg-emerald-300/20" href={`/?host=${encodeURIComponent(host)}&chat=${encodeURIComponent(selected)}`}>Continue this chat</Link>}
+        {!selected && <p className="text-sm text-muted-foreground">Select a conversation for this VM.</p>}{messages.map((message) => <article key={message.id} className={`max-w-3xl rounded-2xl p-4 ${message.role === 'user' ? 'ml-auto bg-primary' : 'border bg-card'}`}><p className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground">{message.role}</p><div className="prose prose-invert max-w-none text-sm"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div></article>)}</section>
     </div>
   </main>;
 }

@@ -67,6 +67,28 @@ async def test_unknown_host_never_reaches_llm_or_executor():
     assert events == [{"type": "error", "message": "Unknown or unapproved host."}]
 
 
+@pytest.mark.asyncio
+async def test_cross_vm_chat_reuse_is_denied_before_model_or_execution(tmp_path):
+    from uuid import uuid4
+
+    from sysadmin_mcp.chat_store import SQLiteChatStore
+
+    store = SQLiteChatStore(tmp_path / "chat.db")
+    session = str(uuid4())
+    store.ensure_session(session, "another-vm", "openai")
+    executor = FakeExecutor()
+    responses = FakeResponses()
+    service = AgentService({"olaf-ubuntu": host()}, executor, model="test",
+                           client=SimpleNamespace(responses=responses), chat_store=store)
+    events = [json.loads(line) async for line in service.stream(
+        ChatRequest(message="ports", host="olaf-ubuntu", session_id=session)
+    )]
+    assert events[0]["type"] == "error"
+    assert "another VM" in events[0]["message"]
+    assert responses.calls == 0 and executor.hosts == []
+    assert store.messages(session) == []
+
+
 def test_password_environment_name_is_validated():
     invalid = HostConfig(**{**host().__dict__, "password_env": "PASSWORD;whoami"})
     with pytest.raises(ConfigError, match="password_env"):
