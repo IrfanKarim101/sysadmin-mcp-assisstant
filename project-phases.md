@@ -38,6 +38,7 @@ phase currently being implemented; **Planned** has not started.
 | 20 — Service Configuration & Lifecycle | Complete | Typed lifecycle planning, validation gates, health verification, and rollback decisions are implemented. |
 | 21 — Supervised Automation UI & Fleet Controls | Complete | Stepwise supervised workflows, fleet controls, raw evidence, and interruption controls are implemented. |
 | 22 — Adversarial Validation & Lab Release | **Active** | Current implementation phase. |
+| 23 — Autonomous Lab Operations | Partial | Recipe-scoped authority and the typed Nginx planner are implemented; live execution remains gated. |
 
 ---
 
@@ -602,3 +603,52 @@ interruption after every persisted stage and require explicit authority rearm
 before rollback. Security, recovery, and package rollback limitation reports are
 maintained under `docs/`. Disposable-VM helper testing and named operator sign-off
 remain outstanding.
+
+---
+
+## Phase 23 — Autonomous Lab Operations
+
+**Status:** Partial
+
+**Goal:** Allow the MCP to execute complete predefined administration recipes
+without per-stage confirmation, but only on explicitly enrolled personal or
+disposable test VMs.
+
+- [ ] Require an Administrator to arm `autonomous_lab` with fresh
+      reauthentication, exact hosts, capabilities, recipe IDs, action budget,
+      concurrency, expiry, maintenance window, and maximum service impact.
+- [ ] Permit only hosts classified `development` or `disposable_lab`; reject
+      production and staging at UI, API, policy, SSH identity, and privileged
+      helper layers.
+- [~] Introduce versioned, signed recipes beginning with `nginx_install_configure`:
+      inspect, back up, install an allowlisted package/version, write named
+      managed files, validate syntax, enable/activate, and verify health.
+- [~] Allow the planner to fill typed recipe inputs, but never generate command
+      text, paths, package names, repositories, service units, or privileged
+      helper arguments outside policy.
+- [ ] Auto-continue low-risk stages only when their exact plan/diff hashes remain
+      unchanged and all preconditions pass; any scope or content change creates
+      a new plan and consumes fresh authority.
+- [ ] Use canary-first rollout, bounded concurrency, per-host locks, stage/action
+      timeouts, circuit breakers, failure budgets, and stop-all behavior after a
+      canary or repeated verification failure.
+- [ ] Require verified recovery snapshots before Apply and automatically roll
+      back clear failures; pause for an operator when rollback is ambiguous or
+      the package operation is not safely reversible.
+- [ ] Preserve global pause and emergency stop, reset to Observe on expiry,
+      logout, backend restart, policy change, host reclassification, repeated
+      failure, or audit/recovery-store failure.
+- [ ] Stream raw per-host evidence and immutable audit events; autonomous output
+      must never be represented as successful until post-change verification
+      passes.
+- [ ] Add dry-run, fault-injection, crash/restart, network-partition, symlink-race,
+      approval/scope replay, and production-boundary tests before enabling live
+      mutation on any enrolled VM.
+
+**Human checkpoint:** An operator explicitly enrolls each personal/test VM,
+reviews the installed root-helper policy and recipe version, then arms a bounded
+Autonomous Lab session. The session may run unattended only inside that envelope.
+
+**Exit criteria:** On disposable VMs, the MCP can complete the Nginx recipe and
+recover from injected failures without arbitrary shell access, scope expansion,
+production reachability, hidden evidence, or continued authority after expiry.

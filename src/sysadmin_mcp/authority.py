@@ -13,6 +13,7 @@ from .config import HostConfig
 
 MODES = frozenset({"observe", "guided", "autonomous_lab"})
 CAPABILITIES = frozenset({"backups", "managed_files", "packages", "services"})
+AUTONOMOUS_RECIPES = frozenset({"nginx_install_configure@1"})
 AUTONOMOUS_ENVIRONMENTS = frozenset({"development", "disposable_lab"})
 
 
@@ -28,6 +29,7 @@ class AuthorityState:
     session_id: str | None = None
     hosts: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
+    recipe_ids: tuple[str, ...] = ()
     action_budget: int = 0
     actions_used: int = 0
     concurrency: int = 0
@@ -77,11 +79,13 @@ class AuthorityService:
         duration_minutes: int,
         action_budget: int,
         concurrency: int,
+        recipe_ids: Sequence[str] = (),
     ) -> dict[str, object]:
         with self._lock:
             try:
                 self._validate_arm(
-                    mode, hosts, capabilities, duration_minutes, action_budget, concurrency
+                    mode, hosts, capabilities, duration_minutes, action_budget, concurrency,
+                    recipe_ids,
                 )
             except AuthorityDenied as error:
                 self._record("automation_mode_denied", username, session_id, {
@@ -98,6 +102,7 @@ class AuthorityService:
                 session_id=session_id,
                 hosts=tuple(sorted(set(hosts))),
                 capabilities=tuple(sorted(set(capabilities))),
+                recipe_ids=tuple(sorted(set(recipe_ids))),
                 action_budget=action_budget,
                 actions_used=0,
                 concurrency=concurrency,
@@ -106,6 +111,21 @@ class AuthorityService:
             )
             self._record("automation_mode_armed", username, session_id, asdict(self._state))
             return asdict(self._state)
+
+    def authorize_recipe(self, username: str, session_id: str, host: str,
+                         recipe_id: str) -> None:
+        with self._lock:
+            self._expire_if_needed()
+            self._require_owner(username, session_id)
+            if self._state.mode != "autonomous_lab" or self._state.status != "active":
+                raise AuthorityDenied("An active Autonomous Lab session is required")
+            if host not in self._state.hosts or recipe_id not in self._state.recipe_ids:
+                raise AuthorityDenied("Host or recipe is outside the armed authority scope")
+            if self._hosts.get(host) is None or (
+                self._hosts[host].environment not in AUTONOMOUS_ENVIRONMENTS
+            ):
+                self._reset("automation_environment_became_ineligible")
+                raise AuthorityDenied("Host is no longer eligible for Autonomous Lab")
 
     def pause(self, username: str, session_id: str) -> dict[str, object]:
         with self._lock:
@@ -194,7 +214,8 @@ class AuthorityService:
             })
 
     def _validate_arm(self, mode: str, hosts: Sequence[str], capabilities: Sequence[str],
-                      duration: int, budget: int, concurrency: int) -> None:
+                      duration: int, budget: int, concurrency: int,
+                      recipe_ids: Sequence[str]) -> None:
         if mode not in {"guided", "autonomous_lab"}:
             raise AuthorityDenied("Only Guided or Autonomous Lab can be armed")
         if not 1 <= len(hosts) <= 30 or len(set(hosts)) != len(hosts):
@@ -208,6 +229,10 @@ class AuthorityService:
             raise AuthorityDenied("Autonomous Lab only permits development or disposable-lab hosts")
         if not capabilities or not set(capabilities) <= CAPABILITIES:
             raise AuthorityDenied("One or more capabilities are unavailable")
+        if len(set(recipe_ids)) != len(recipe_ids) or not set(recipe_ids) <= AUTONOMOUS_RECIPES:
+            raise AuthorityDenied("One or more autonomous recipes are unavailable")
+        if recipe_ids and mode != "autonomous_lab":
+            raise AuthorityDenied("Recipes can only be armed in Autonomous Lab")
         if not 15 <= duration <= 60:
             raise AuthorityDenied("Duration must be between 15 and 60 minutes")
         if not 1 <= budget <= 50:

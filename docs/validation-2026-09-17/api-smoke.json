@@ -1,0 +1,723 @@
+[
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/auth/me",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/auth/change-password",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/auth/logout",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/auth/sessions",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/auth/sessions/revoke",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/auth/events",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/hosts",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/authority",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/authority/arm",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/authority/pause",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/authority/resume",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/authority/stop",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/authority/emergency-stop",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/changes",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/recipes",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/recipes/plan",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/managed-files/policies",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/packages/policies",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/services/policies",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/changes",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/revise",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/skip-host",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/changes/{transaction_id}",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/preview",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/approve",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/simulate",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/start",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/advance",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/accept",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/rollback",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/cancel",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/hosts/classify",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/providers",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/fleet/health",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/fleet/hosts/{host_name}",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/playbooks",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/playbooks/run",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/security/posture",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/remediation/actions",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/remediation/restart/preview",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/remediation/restart/execute",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/backups/jobs",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/backups/preview",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/backups/execute",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/hosts/discover-key",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/hosts/decide-key",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/hosts/remove",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/audit",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/chat/sessions/{session_id}",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "GET",
+    "path": "/api/chat/sessions",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "DELETE",
+    "path": "/api/chat/sessions/{session_id}",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "DELETE",
+    "path": "/api/chat/sessions",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "unauthenticated",
+    "method": "POST",
+    "path": "/api/chat",
+    "status": 401,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/auth/me",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/auth/sessions",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/auth/events",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/hosts",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/authority",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/changes",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/recipes",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/managed-files/policies",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/packages/policies",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/services/policies",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/providers",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/fleet/health",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/playbooks",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/remediation/actions",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/backups/jobs",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/audit",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "authenticated empty-fleet GET",
+    "method": "GET",
+    "path": "/api/chat/sessions",
+    "status": 200,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/auth/change-password",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/auth/logout",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/auth/sessions/revoke",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/authority/arm",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/authority/pause",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/authority/resume",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/authority/stop",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/authority/emergency-stop",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/recipes/plan",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/changes",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/revise",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/skip-host",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/preview",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/approve",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/simulate",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/start",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/advance",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/accept",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/rollback",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/changes/{transaction_id}/cancel",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/hosts/classify",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/playbooks/run",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/security/posture",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/remediation/restart/preview",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/remediation/restart/execute",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/backups/preview",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/backups/execute",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/hosts/discover-key",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/hosts/decide-key",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/hosts/remove",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "DELETE",
+    "path": "/api/chat/sessions/{session_id}",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "DELETE",
+    "path": "/api/chat/sessions",
+    "status": 403,
+    "passed": true
+  },
+  {
+    "check": "missing CSRF",
+    "method": "POST",
+    "path": "/api/chat",
+    "status": 403,
+    "passed": true
+  }
+]

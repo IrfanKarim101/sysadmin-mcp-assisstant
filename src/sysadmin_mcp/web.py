@@ -22,7 +22,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import SQLiteAuditLog
-from .authority import AuthorityDenied, AuthorityService, CAPABILITIES
+from .authority import AuthorityDenied, AuthorityService, AUTONOMOUS_RECIPES, CAPABILITIES
 from .auth import ABSOLUTE_TIMEOUT, SESSION_COOKIE, AuthStore, LoginThrottled
 from .backups import BackupDenied, BackupService
 from .chat_store import MAX_CONTENT_CHARS, SQLiteChatStore
@@ -42,6 +42,7 @@ from .presentation import DiagnosticPresenter
 from .rate_limit import SlidingWindowRateLimiter
 from .remediation import RemediationDenied, RemediationService
 from .recovery import RecoveryDenied
+from .recipes import AutonomousRecipePlanner, RecipeDenied
 from .security_posture import SecurityPostureService
 from .transport import AsyncSSHTransport
 
@@ -145,6 +146,7 @@ class AuthorityArmRequest(BaseModel):
     duration_minutes: int = Field(ge=15, le=60)
     action_budget: int = Field(ge=1, le=50)
     concurrency: int = Field(ge=1, le=3)
+    recipe_ids: list[str] = Field(default_factory=list, max_length=8)
     password: str = Field(min_length=1, max_length=256)
 
 
@@ -184,6 +186,17 @@ class ChangeSkipHostRequest(BaseModel):
 class ChangeAdvanceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     activation_password: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class RecipePlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    recipe_id: Literal["nginx_install_configure@1"]
+    host: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+    title: str = Field(min_length=1, max_length=120)
+    config_content: str = Field(min_length=1, max_length=32_000)
+    package_version: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9.+:~_-]{0,127}$"
+    )
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -525,7 +538,9 @@ def create_app(
 
     @app.get("/api/authority")
     async def authority_status() -> dict[str, object]:
-        return {**_authority_view(authority.current()), "available_capabilities": sorted(CAPABILITIES)}
+        return {**_authority_view(authority.current()),
+                "available_capabilities": sorted(CAPABILITIES),
+                "available_recipe_ids": sorted(AUTONOMOUS_RECIPES)}
 
     @app.post("/api/authority/arm")
     async def authority_arm(body: AuthorityArmRequest, request: Request) -> dict[str, object]:
@@ -539,7 +554,7 @@ def create_app(
                 mode=body.mode, username=session.username, session_id=session.session_id,
                 hosts=body.hosts, capabilities=body.capabilities,
                 duration_minutes=body.duration_minutes, action_budget=body.action_budget,
-                concurrency=body.concurrency,
+                concurrency=body.concurrency, recipe_ids=body.recipe_ids,
             ))
         except AuthorityDenied as error:
             raise HTTPException(400, str(error)) from error
@@ -593,6 +608,28 @@ def create_app(
         try:
             return changes.list(session.username, session.session_id, limit)
         except ChangeDenied as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.get("/api/recipes")
+    async def recipe_list(request: Request) -> list[dict[str, object]]:
+        change_operator(request)
+        return AutonomousRecipePlanner.recipes()
+
+    @app.post("/api/recipes/plan")
+    async def recipe_plan(body: RecipePlanRequest, request: Request) -> dict[str, object]:
+        session = change_operator(request)
+        try:
+            authority.authorize_recipe(
+                session.username, session.session_id, body.host, body.recipe_id
+            )
+            actions = AutonomousRecipePlanner(service.hosts).plan(
+                body.recipe_id, body.host, body.config_content, body.package_version
+            )
+            return changes.create(
+                session.username, session.session_id, body.title, actions
+            )
+        except (AuthorityDenied, RecipeDenied, ChangeDenied, ManagedFileDenied,
+                PackageDenied, ServiceDenied) as error:
             raise HTTPException(400, str(error)) from error
 
     @app.get("/api/managed-files/policies")
