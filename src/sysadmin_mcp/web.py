@@ -43,6 +43,7 @@ from .rate_limit import SlidingWindowRateLimiter
 from .remediation import RemediationDenied, RemediationService
 from .recovery import RecoveryDenied
 from .recipes import AutonomousRecipePlanner, RecipeDenied
+from .rocky_software import SoftwareDenied, catalog as software_catalog, plan as software_plan
 from .security_posture import SecurityPostureService
 from .transport import AsyncSSHTransport
 
@@ -197,6 +198,15 @@ class RecipePlanRequest(BaseModel):
     package_version: str | None = Field(
         default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9.+:~_-]{0,127}$"
     )
+
+
+class SoftwarePlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    host: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+    product: Literal["nginx", "tomcat", "kafka", "mysql", "mongodb"]
+    operation: Literal["install", "upgrade"]
+    deployment: Literal["native", "podman"]
+    target_version: str = Field(min_length=5, max_length=32)
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -618,6 +628,26 @@ def create_app(
     async def recipe_list(request: Request) -> list[dict[str, object]]:
         change_operator(request)
         return AutonomousRecipePlanner.recipes()
+
+    @app.get("/api/software")
+    async def software_profiles(request: Request) -> list[dict[str, object]]:
+        change_operator(request)
+        return software_catalog()
+
+    @app.post("/api/software/plan")
+    async def software_preview(body: SoftwarePlanRequest, request: Request) -> dict[str, object]:
+        change_operator(request)
+        host = service.hosts.get(body.host)
+        if host is None:
+            raise HTTPException(404, "Unknown or unapproved host")
+        if host.environment not in {"development", "disposable_lab"}:
+            raise HTTPException(403, "Autonomous software workflows require a development or disposable-lab VM")
+        try:
+            return {"host": body.host, **software_plan(
+                body.product, body.operation, body.target_version, body.deployment
+            )}
+        except SoftwareDenied as error:
+            raise HTTPException(400, str(error)) from error
 
     @app.post("/api/recipes/plan")
     async def recipe_plan(body: RecipePlanRequest, request: Request) -> dict[str, object]:

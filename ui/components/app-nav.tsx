@@ -17,6 +17,7 @@ import {
   Wrench,
   GitPullRequestDraft,
   X,
+  Package,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { apiFetch } from '@/lib/api';
@@ -29,6 +30,7 @@ const links = [
   ['/security', 'Security', ShieldCheck],
   ['/remediation', 'Remediation', Wrench],
   ['/changes', 'Changes', GitPullRequestDraft],
+  ['/software', 'Software', Package],
   ['/backups', 'Database backups', DatabaseBackup],
   ['/history', 'History', History],
   ['/account', 'Account', UserRound],

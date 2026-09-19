@@ -89,6 +89,35 @@ async def test_cross_vm_chat_reuse_is_denied_before_model_or_execution(tmp_path)
     assert store.messages(session) == []
 
 
+def test_rocky_software_api_plans_both_modes_without_execution(tmp_path):
+    audit = SQLiteAuditLog(tmp_path / "audit.db")
+    target = HostConfig(**{**host().__dict__, "environment": "development"})
+    executor = FakeExecutor()
+    service = AgentService({target.name: target}, executor, model="test",
+                           client=SimpleNamespace(responses=FakeResponses()))
+    client = TestClient(create_app(service, audit))
+    assert client.get("/api/software").status_code == 401
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "admin"}).json()
+    csrf = {"x-csrf-token": login["csrf_token"]}
+    assert client.post("/api/auth/change-password", headers=csrf,
+                       json={"current_password": "admin", "new_password": "software-test-password"}).status_code == 200
+    assert len(client.get("/api/software").json()) == 5
+    for product in ("nginx", "tomcat", "kafka", "mysql", "mongodb"):
+        for deployment in ("native", "podman"):
+            body = {"host": target.name, "product": product, "operation": "upgrade",
+                    "deployment": deployment, "target_version": "8.0.12"}
+            assert client.post("/api/software/plan", json=body).status_code == 403
+            response = client.post("/api/software/plan", headers=csrf, json=body)
+            assert response.status_code == 200
+            assert response.json()["executable"] is False
+            assert response.json()["preserve_data"] is True
+    assert executor.hosts == []
+    body["product"] = "shell"
+    assert client.post("/api/software/plan", headers=csrf, json=body).status_code == 422
+    body["product"], body["host"] = "mysql", "unknown"
+    assert client.post("/api/software/plan", headers=csrf, json=body).status_code == 404
+
+
 def test_password_environment_name_is_validated():
     invalid = HostConfig(**{**host().__dict__, "password_env": "PASSWORD;whoami"})
     with pytest.raises(ConfigError, match="password_env"):
@@ -131,6 +160,7 @@ def test_api_does_not_expose_credentials(tmp_path: Path):
         , "/api/changes/{transaction_id}/skip-host"
         , "/api/changes/{transaction_id}/start", "/api/changes/{transaction_id}/advance"
         , "/api/recipes", "/api/recipes/plan"
+        , "/api/software", "/api/software/plan"
     }
 
 
