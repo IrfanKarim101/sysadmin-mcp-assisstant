@@ -1,9 +1,13 @@
 # Evesdropctl
 
-A security-first MCP service for **read-only** diagnostics on approved Linux
-hosts over SSH. The complete design and delivery plan are in
+An MCP service and web console for Linux diagnostics over SSH, with optional
+**user-approved automation on lab hosts**. Observe mode is read-only by default.
+Host changes require explicitly armed authority and approval of each job.
+
+This README describes the current implementation.
 [`project_context.md`](project_context.md) and
-[`project-phases.md`](project-phases.md).
+[`project-phases.md`](project-phases.md) retain the original design and phased
+roadmap; some early descriptions predate the optional host-script execution path.
 
 ## Web console authentication
 
@@ -25,51 +29,80 @@ frosted glass surfaces with an opaque fallback for reduced transparency.
 
 ## Current status
 
-Phase 1's executor policy and typed MCP adapter are implemented. `ReadOnlyCommandPolicy` builds a
-small, fixed set of argument vectors for ports, services, resource snapshots,
-allowlisted log reads/searches, and active users. `ReadOnlyExecutor` applies
-uniform output bounds, while the AsyncSSH implementation remains isolated in
-the transport module. The local operator UI adds fleet views, investigation
-playbooks, security posture, encrypted VM credential storage, conversation
-history, and approval-gated service restart and database-backup jobs.
+**Updated September 23, 2026.** The project has working diagnostics and an
+implemented approval-based automation workflow. Fresh Rocky 9 installation
+acceptance is still pending; implementation and automated tests do not establish
+production readiness.
 
-Phase 2's deployable OS hardening is available in [`hardening/`](hardening/).
-It uses an OpenSSH forced-command gate with fixed absolute executables, a
-root-owned log allowlist, disabled interactive/forwarding features, and an
-adversarial verification checklist. Deployment and live escape testing must be
-performed on the disposable Linux host before Phase 2 is considered complete.
+| Area | Implemented behavior | Validation or limitation |
+| --- | --- | --- |
+| Diagnostics and MCP | Typed SSH diagnostics for resources, services, ports, logs, users, containers and inventory; bounded output and audit records | Default MCP server remains read-only |
+| Operator console | Authentication, encrypted VM credentials, SSH key trust, VM-scoped chat/history, fleet views, playbooks and security posture | ChatGPT, Gemini and compatible local model support |
+| Typed remediation and backups | Approved service restarts and host-policy database backup jobs | Require separately provisioned host policies and permissions |
+| Host scripts | Generate or prepare Python and an independent verifier; persist, review, approve, execute and record results | Lab-only; every job requires approval in both Guided and Autonomous Lab modes |
+| Software installation | Fresh native Nginx and Tomcat installs on Rocky Linux 9 from signed baseos/appstream RPMs, with exact upstream version selection | Automated coverage passes; successful live fresh-install acceptance remains outstanding |
+| Dynamic sandbox | Reviewed Python in a separate rootless, offline container | Cannot install host packages or administer the VM |
+| Changes and versioned recipes | Planning, previews, simulation, approval and simulated recovery workflows | Older Changes/recipe paths remain simulation-only; distinct from executable host jobs |
+| Other software workflows | Upgrade and Podman plans; Kafka, MySQL and MongoDB catalog entries | Planning-only; no deterministic live installers or validated data-preserving upgrades |
 
-Phase 3's mandatory append-only SQLite audit sink is implemented. It records a
-durable attempt before transport execution, a terminal success/error event,
-and policy denials, with bounded excerpts and full-output hashes. See
-[`docs/audit.md`](docs/audit.md) for the event and operational model.
+### Approval and execution contract
 
-Phase 4's typed MCP stdio adapter exposes the six diagnostic capabilities with
-generated bounded schemas and read-only annotations. It has no raw command or
-generic SSH tool. See [`docs/mcp-server.md`](docs/mcp-server.md) for runtime and
-validation instructions.
+```text
+Prepare job → Review host, script and verifier → User approves
+→ Execute once → Independently verify → Inspect recorded evidence
+```
 
-Phase 5 adds a raw-first presentation model and a replaceable summary boundary.
-The safe default summary is content-blind, so prompt-like text in logs remains
-inert. See [`docs/presentation.md`](docs/presentation.md).
+Arming a mode does not approve a host job. The operator must approve the saved
+job in the authenticated web UI with password confirmation. MCP can prepare
+jobs and retrieve their results, but cannot approve or start them itself.
+Jobs are bound to the operator session, host, script digest and authority lease,
+with expiry, one-use execution, budgets and concurrency controls.
 
-Phase 6 provides validated multi-host TOML configuration, per-host log
-allowlists and resource thresholds, plus an atomic `sysadmin-hosts` management
-command. See [`docs/host-configuration.md`](docs/host-configuration.md).
+Host scripts run with the selected SSH account's real permissions; they are
+**not a sandbox**. They require a development/disposable-lab host, a root-owned
+Python 3.11+ helper, a non-root execution account and separately configured
+noninteractive sudo permissions where needed. Host jobs allow up to 900 seconds;
+isolated sandbox jobs remain capped at 120 seconds. Failure or stop can leave
+partial changes; no automatic rollback or mutation retry is promised.
 
-Phase 7's local adversarial review covers injection, traversal, audit
-completeness, prompt-like log content, and output amplification. Findings and
-remaining live-host checks are recorded in [`SECURITY_REVIEW.md`](SECURITY_REVIEW.md).
+### Latest verification
 
-Phase 8's MVP cut adds per-session rate limiting, clear safe policy errors, and
-`sysadmin-preflight`. The deployment sequence and acceptance criteria are in
-[`MVP_RUNBOOK.md`](MVP_RUNBOOK.md).
+The latest recorded validation is **September 21, 2026**; these results were not
+rerun for this documentation update. See the
+[full test report](docs/APPROVED_INSTALL_TEST_REPORT.md).
 
-Host log access is configured with exact absolute paths in
-`config/hosts.toml`; globs, relative paths, and paths containing traversal are
-not accepted. Log line requests are capped at 500 lines, and every command
-result is capped at 2,000 lines and 256 KiB per output stream, with
-`CommandResult.truncated` indicating when a cap was applied.
+- **402 backend tests passed**, including 29 installation-specific tests.
+- Production UI build, Python wheel build and packaged-template smoke checks passed.
+- Lint checks passed for the changed Python code and the new software/script pages.
+- Repository-wide checks are not all green: existing TypeScript errors remain in
+  Account and Changes pages, alongside broader Python/frontend lint findings.
+- Live checks on the selected Rocky 9.7 VM were read-only: both existing services
+  were running, Nginx configuration validation passed, and their root URLs returned
+  HTTP 403 (Nginx) and 404 (Tomcat). These responses do not prove application health.
+  No installation or VM configuration changes were performed.
+
+### Remaining work
+
+1. Complete fresh Nginx and Tomcat installation acceptance on a clean Rocky 9 lab
+   VM through the actual MCP preparation and UI approval workflow. The previously
+   inspected VM already has both applications and lacks Python 3.11 and the host helper.
+2. Resolve the repository-wide TypeScript and lint findings.
+3. Complete remaining host-hardening deployment and live escape checks before
+   claiming that deployment's security acceptance; see [hardening](hardening/)
+   and [security review](SECURITY_REVIEW.md).
+4. Implement and validate upgrade preservation/restore, Podman deployment and
+   additional software installers before enabling their execution.
+
+The diagnostic executor still accepts fixed typed requests, not arbitrary shell
+commands. Exact absolute log paths are configured per host; globs and traversal
+are rejected. Diagnostic log requests are capped at 500 lines, and command output
+is capped at 2,000 lines and 256 KiB per stream with an explicit truncation flag.
+The separately enabled host-script path accepts reviewed Python, which may launch
+subprocesses under the account's permissions.
+
+Implementation details: [MCP server](docs/mcp-server.md),
+[audit records](docs/audit.md), [host configuration](docs/host-configuration.md),
+[presentation](docs/presentation.md), and [deployment runbook](MVP_RUNBOOK.md).
 
 ## Local setup
 
@@ -104,6 +137,7 @@ Start the local API and UI in separate terminals:
 ```powershell
 sysadmin-web
 cd ui
+npm install
 npm run dev
 ```
 
@@ -153,4 +187,25 @@ See [setup, operation, and limitations](docs/HOST_SCRIPT_MODES.md).
 
 ### Approval-based software installation
 
-Native fresh installs of Nginx and Tomcat on Rocky Linux 9 are available from Software management or the MCP `prepare_software_install` tool. Each job requires administrator review and password confirmation before executing, including in Autonomous Lab mode. See [installation workflow](docs/APPROVED_SOFTWARE_INSTALL.md) for prerequisites, supported versions, verification and limitations.
+Use **Software management → Native → Fresh install → Prepare installation for
+approval**, or the MCP `prepare_software_install` tool. Select an exact upstream
+version available in the target's baseos/appstream repositories. Existing
+installations and recognized application paths are refused. Required dependencies
+may be installed or updated, and the packaged service is enabled and started.
+No firewall changes or application deployment are included.
+
+For the MCP preparation tools, first arm Host scripts and create an MCP connection
+from the Host scripts page. Set the returned token as
+`SYSADMIN_MCP_EXECUTION_TOKEN` in the MCP server environment, then start:
+
+```powershell
+sysadmin-mcp --config config/hosts.toml --audit-db data/audit.db --enable-host-scripts
+```
+
+The web backend must be running on the same machine. Keep the token out of chat
+and source control. Return the job's review link to the operator; after their
+approval, read the result with `get_host_script_job`.
+
+See the [installation workflow](docs/APPROVED_SOFTWARE_INSTALL.md) and
+[host-script setup](docs/HOST_SCRIPT_MODES.md) for provisioning, verification,
+limits and failure behavior.
