@@ -41,7 +41,7 @@ PROFILES = {
         "Keep virtual hosts, certificates, custom modules and document roots.",
     ),
     "tomcat": SoftwareProfile(
-        "tomcat", "Apache Tomcat", "tomcat.service", "verified_apache_archive",
+        "tomcat", "Apache Tomcat", "tomcat.service", "approved_rpm_repository",
         ("CATALINA_BASE/webapps",), ("CATALINA_BASE/conf",),
         ("java_compatibility", "tomcat_config", "systemd_active", "application_http"),
         ("java",),
@@ -74,7 +74,10 @@ PROFILES = {
 def catalog() -> list[dict[str, object]]:
     return [{**asdict(profile), "platform": "rocky:9", "operations": ["install", "upgrade"],
              "deployment_modes": ["native", "podman"],
-             "upgrade_policy": "same_major_minor_only", "live_execution": False}
+             "upgrade_policy": "same_major_minor_only", "live_execution": profile.id in {"nginx", "tomcat"},
+             "executable_operations": ["install"] if profile.id in {"nginx", "tomcat"} else [],
+             "executable_deployments": ["native"] if profile.id in {"nginx", "tomcat"} else [],
+             "approval_required": True}
             for profile in PROFILES.values()]
 
 

@@ -23,10 +23,9 @@ downgrades, floating versions, and cross-release migrations. That rule must
 be applied to versions obtained from trusted host inspection before execution;
 the preview endpoint does not accept user-supplied installed-version evidence.
 
-**Not implemented yet:** native installers, Podman deployment adapters,
-autonomous execution through MCP/chat, durable software job execution,
-host-enforced recipe policy, and application-specific backup/restore probes.
-No live-execution flag or authority allowlist has been widened for these plans.
+**Available execution:** fresh native Nginx and Tomcat installs through `/api/software/jobs` or MCP `prepare_software_install`. These persist an approval-required host job. The user reviews and reauthenticates in the web UI; installation and verification then run automatically. Both use signed Rocky RPMs from existing baseos/appstream repositories, including Java dependencies for Tomcat. See [approved installation workflow](APPROVED_SOFTWARE_INSTALL.md).
+
+**Still planning-only:** upgrades, Podman deployments, Kafka, MySQL, and MongoDB. Application-specific backup/restore probes and host-enforced recipe policy remain unimplemented. The existing `/api/software/plan` endpoint remains a non-executable planning preview. Native installer behavior has automated tests; live Rocky VM acceptance remains outstanding.
 
 ## Data-preservation contract
 

@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { apiFetch } from '@/lib/api';
 
-type Mode = 'observe' | 'guided' | 'autonomous_lab';
+type Mode = 'observe' | 'guided' | 'autonomous_lab' | 'dynamic_sandbox';
 type Authority = {
   mode: Mode; status: 'inactive' | 'active' | 'paused'; owner: string | null;
   hosts: string[]; capabilities: string[]; action_budget: number;
@@ -16,9 +16,9 @@ type Authority = {
 };
 type Host = { name: string; hostname: string; environment: string };
 const labels: Record<string, string> = {
-  observe: 'Observe', guided: 'Guided', autonomous_lab: 'Autonomous Lab',
+  observe: 'Observe', guided: 'Guided Lab', autonomous_lab: 'Autonomous Lab',
   managed_files: 'Managed files', packages: 'Packages', services: 'Services',
-  backups: 'Backups',
+  host_scripts: 'Host scripts (real VM changes)', backups: 'Backups', dynamic_sandbox: 'Dynamic sandbox', dynamic_scripts: 'Isolated Python scripts',
 };
 
 export function AuthorityControl() {
@@ -30,7 +30,7 @@ export function AuthorityControl() {
   const [clock, setClock] = useState(Date.now());
   const [form, setForm] = useState({
     mode: 'guided' as Exclude<Mode, 'observe'>, hosts: [] as string[],
-    capabilities: ['services'] as string[], duration_minutes: 15,
+    capabilities: ['host_scripts'] as string[], duration_minutes: 15,
     recipe_ids: [] as string[], action_budget: 5, concurrency: 1, password: '',
   });
 
@@ -74,6 +74,7 @@ export function AuthorityControl() {
       const data = await response.json() as Authority & { detail?: string };
       if (!response.ok) throw new Error(data.detail ?? `Could not ${action} authority mode.`);
       setState(data);
+      return true;
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Authority transition failed.'); }
     finally { setBusy(false); }
   }
@@ -81,7 +82,7 @@ export function AuthorityControl() {
   if (!state) return null;
   const remaining = state.expires_at
     ? Math.max(0, Math.ceil((new Date(state.expires_at).getTime() - clock) / 60_000)) : 0;
-  const selectableHosts = form.mode === 'autonomous_lab'
+  const selectableHosts = (['autonomous_lab', 'dynamic_sandbox'].includes(form.mode) || form.capabilities.includes('host_scripts'))
     ? hosts.filter((host) => ['development', 'disposable_lab'].includes(host.environment)) : hosts;
 
   return <>
@@ -89,7 +90,8 @@ export function AuthorityControl() {
       <Shield />Mode: Observe
     </Button> : <aside className="fixed inset-x-4 bottom-4 z-[70] mx-auto flex max-w-4xl flex-wrap items-center gap-3 rounded-2xl border border-amber-400/30 bg-zinc-950/95 p-3 shadow-2xl backdrop-blur">
       <ShieldAlert className="text-amber-300" />
-      <div className="min-w-40 flex-1"><p className="text-sm font-semibold text-amber-100">{labels[state.mode]} · {state.status}</p><p className="text-xs text-muted-foreground">{state.hosts.length} host(s) · {remaining} min remaining · no write actions implemented yet</p></div>
+      <div className="min-w-40 flex-1"><p className="text-sm font-semibold text-amber-100">{labels[state.mode]} · {state.status}</p><p className="text-xs text-muted-foreground">VMs: {state.hosts.join(', ')} · {remaining} min remaining</p><p className="text-xs text-muted-foreground">{state.capabilities.map((capability) => labels[capability] ?? capability).join(', ')}</p></div>
+      <Button size="sm" variant="outline" disabled={busy} onClick={() => { void (async () => { const previous = state; if (await transition('stop')) { setForm((current) => ({ ...current, mode: previous.mode === 'observe' ? 'guided' : previous.mode, hosts: previous.hosts, capabilities: previous.capabilities, password: '' })); setOpen(true); } })(); }}>Change scope</Button>
       {state.status === 'active' ? <Button size="sm" variant="outline" disabled={busy} onClick={() => void transition('pause')}><Pause />Pause</Button> : <Button size="sm" variant="outline" disabled={busy} onClick={() => void transition('resume')}><Play />Resume</Button>}
       <Button size="sm" variant="outline" disabled={busy} onClick={() => void transition('stop')}><Square />Disable</Button>
       <Button size="sm" variant="destructive" disabled={busy} onClick={() => void transition('emergency-stop')}><AlertTriangle />Emergency stop</Button>
@@ -97,20 +99,20 @@ export function AuthorityControl() {
 
     {open && <div className="fixed inset-0 z-[80] grid place-items-center overflow-y-auto bg-black/70 p-4" role="dialog" aria-modal="true" aria-labelledby="authority-title">
       <form onSubmit={arm} className="my-8 w-full max-w-xl rounded-2xl border bg-card p-6 shadow-2xl">
-        <div className="flex items-start gap-3"><ShieldAlert className="mt-1 text-amber-300" /><div><h2 id="authority-title" className="text-lg font-semibold">Arm supervised authority</h2><p className="text-sm text-muted-foreground">This creates temporary server-side authority only. Phase 15 exposes no new write actions.</p></div></div>
+        <div className="flex items-start gap-3"><ShieldAlert className="mt-1 text-amber-300" /><div><h2 id="authority-title" className="text-lg font-semibold">Arm supervised authority</h2><p className="text-sm text-muted-foreground">Select the hosts, capabilities, and lifetime. Dynamic sandbox runs reviewed Python in isolated containers with no VM filesystem or network access.</p></div></div>
         {error && <p role="alert" className="mt-4 rounded-lg bg-red-400/10 p-3 text-sm text-red-200">{error}</p>}
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          <Label className="grid gap-2">Mode<select className="h-9 rounded-lg border bg-background px-3" value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value as typeof form.mode, hosts: [], recipe_ids: [] })}><option value="guided">Guided</option><option value="autonomous_lab">Autonomous Lab</option></select></Label>
+          <Label className="grid gap-2">Mode<select className="h-9 rounded-lg border bg-background px-3" value={form.mode} onChange={(event) => setForm({ ...form, mode: event.target.value as typeof form.mode, hosts: [], recipe_ids: [], capabilities: event.target.value === 'dynamic_sandbox' ? ['dynamic_scripts'] : ['host_scripts'] })}><option value="guided">Guided Lab</option><option value="autonomous_lab">Autonomous Lab</option><option value="dynamic_sandbox">Dynamic sandbox</option></select></Label>
           <Label className="grid gap-2">Duration<select className="h-9 rounded-lg border bg-background px-3" value={form.duration_minutes} onChange={(event) => setForm({ ...form, duration_minutes: Number(event.target.value) })}><option value={15}>15 minutes</option><option value={30}>30 minutes</option><option value={60}>60 minutes</option></select></Label>
           <Label className="grid gap-2">Action budget<Input type="number" min={1} max={50} value={form.action_budget} onChange={(event) => setForm({ ...form, action_budget: Number(event.target.value) })} /></Label>
           <Label className="grid gap-2">Concurrency<Input type="number" min={1} max={Math.min(3, Math.max(1, form.hosts.length))} value={form.concurrency} onChange={(event) => setForm({ ...form, concurrency: Number(event.target.value) })} /></Label>
         </div>
         <fieldset className="mt-5"><legend className="text-sm font-medium">Target hosts</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{selectableHosts.map((host) => <label key={host.name} className="flex gap-2 rounded-lg border p-3 text-sm"><input type="checkbox" checked={form.hosts.includes(host.name)} onChange={(event) => setForm({ ...form, hosts: event.target.checked ? [...form.hosts, host.name] : form.hosts.filter((name) => name !== host.name) })} /><span>{host.name}<small className="block text-muted-foreground">{host.environment}</small></span></label>)}</div>{!selectableHosts.length && <p className="mt-2 text-xs text-amber-200">No hosts are eligible. Classify a VM as development or disposable lab first.</p>}</fieldset>
-        <fieldset className="mt-5"><legend className="text-sm font-medium">Capability scope</legend><div className="mt-2 flex flex-wrap gap-3">{(state.available_capabilities ?? []).map((capability) => <label key={capability} className="flex gap-2 text-sm"><input type="checkbox" checked={form.capabilities.includes(capability)} onChange={(event) => setForm({ ...form, capabilities: event.target.checked ? [...form.capabilities, capability] : form.capabilities.filter((item) => item !== capability) })} />{labels[capability]}</label>)}</div></fieldset>
+        <fieldset className="mt-5"><legend className="text-sm font-medium">Capability scope</legend><div className="mt-2 flex flex-wrap gap-3">{(state.available_capabilities ?? []).filter((capability) => form.mode === 'dynamic_sandbox' ? capability === 'dynamic_scripts' : capability !== 'dynamic_scripts').map((capability) => <label key={capability} className="flex gap-2 text-sm"><input type="checkbox" checked={form.capabilities.includes(capability)} onChange={(event) => setForm({ ...form, capabilities: event.target.checked ? [...form.capabilities, capability] : form.capabilities.filter((item) => item !== capability) })} />{labels[capability]}</label>)}</div></fieldset>
         {form.mode === 'autonomous_lab' && <fieldset className="mt-5"><legend className="text-sm font-medium">Autonomous recipe scope</legend><div className="mt-2 space-y-2">{(state.available_recipe_ids ?? []).map((recipe) => <label key={recipe} className="flex gap-2 rounded-lg border p-3 text-sm"><input type="checkbox" checked={form.recipe_ids.includes(recipe)} onChange={(event) => setForm({ ...form, recipe_ids: event.target.checked ? [...form.recipe_ids, recipe] : form.recipe_ids.filter((item) => item !== recipe) })}/><span>{recipe}<small className="block text-muted-foreground">Planning only until the Phase 22 live-release gate passes.</small></span></label>)}</div></fieldset>}
-        <Label className="mt-5 grid gap-2">Administrator password<Input required type="password" autoComplete="current-password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></Label>
+        <p className="mt-4 text-sm text-amber-200">Host scripts run on the real VM with its SSH account permissions. Both Guided and Autonomous Lab require your review and approval for every host script. Approved jobs execute and verify automatically within this host scope and budget. Existing recipe workflows remain planning-only. Stop does not undo completed changes.</p><Label className="mt-5 grid gap-2">Administrator password<Input required type="password" autoComplete="current-password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></Label>
         <p className="mt-4 text-xs text-muted-foreground">Observe remains the default after logout, expiry, emergency stop, or backend restart.</p>
-        <div className="mt-5 flex justify-end gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => { setOpen(false); setError(''); }}>Cancel</Button><Button type="submit" disabled={busy || !form.hosts.length || !form.capabilities.length || (form.mode === 'autonomous_lab' && !form.recipe_ids.length)}>{busy && <LoaderCircle className="animate-spin" />}Arm mode</Button></div>
+        <div className="mt-5 flex justify-end gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => { setOpen(false); setError(''); }}>Cancel</Button><Button type="submit" disabled={busy || !form.hosts.length || !form.capabilities.length || (form.mode === 'autonomous_lab' && !form.recipe_ids.length && !form.capabilities.includes('host_scripts'))}>{busy && <LoaderCircle className="animate-spin" />}Arm mode</Button></div>
       </form>
     </div>}
   </>;

@@ -37,9 +37,13 @@ def test_version_is_not_a_command_or_floating_label(version):
         plan("nginx", "install", version)
 
 
-def test_catalog_never_claims_live_execution():
+def test_catalog_limits_execution_to_approved_native_nginx_and_tomcat_installs():
     assert len(catalog()) == 5
-    assert all(not row["live_execution"] for row in catalog())
+    assert {row["id"] for row in catalog() if row["live_execution"]} == {"nginx", "tomcat"}
+    for row in catalog():
+        assert row["approval_required"]
+        assert row["executable_operations"] == (["install"] if row["live_execution"] else [])
+        assert row["executable_deployments"] == (["native"] if row["live_execution"] else [])
 
 
 def test_unknown_product_and_action_are_denied():

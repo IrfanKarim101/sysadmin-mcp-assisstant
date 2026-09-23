@@ -31,6 +31,8 @@ const links = [
   ['/remediation', 'Remediation', Wrench],
   ['/changes', 'Changes', GitPullRequestDraft],
   ['/software', 'Software', Package],
+  ['/scripts', 'Host scripts', TerminalSquare],
+  ['/dynamic', 'Dynamic scripts', TerminalSquare],
   ['/backups', 'Database backups', DatabaseBackup],
   ['/history', 'History', History],
   ['/account', 'Account', UserRound],

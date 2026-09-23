@@ -11,8 +11,8 @@ from uuid import uuid4
 from .audit import AuditEvent, AuditSink
 from .config import HostConfig
 
-MODES = frozenset({"observe", "guided", "autonomous_lab"})
-CAPABILITIES = frozenset({"backups", "managed_files", "packages", "services"})
+MODES = frozenset({"observe", "guided", "autonomous_lab", "dynamic_sandbox"})
+CAPABILITIES = frozenset({"backups", "managed_files", "packages", "services", "dynamic_scripts", "host_scripts"})
 AUTONOMOUS_RECIPES = frozenset({"nginx_install_configure@1"})
 AUTONOMOUS_ENVIRONMENTS = frozenset({"development", "disposable_lab"})
 
@@ -23,6 +23,7 @@ class AuthorityDenied(ValueError):
 
 @dataclass(frozen=True)
 class AuthorityState:
+    generation_id: str | None = None
     mode: str = "observe"
     status: str = "inactive"
     owner: str | None = None
@@ -96,6 +97,7 @@ class AuthorityService:
                 raise AuthorityDenied("Disable the current authority mode before arming another")
             now = self._utc_now()
             self._state = AuthorityState(
+                generation_id=str(uuid4()),
                 mode=mode,
                 status="active",
                 owner=username,
@@ -109,7 +111,11 @@ class AuthorityService:
                 armed_at=now.isoformat(),
                 expires_at=(now + timedelta(minutes=duration_minutes)).isoformat(),
             )
-            self._record("automation_mode_armed", username, session_id, asdict(self._state))
+            try:
+                self._record("automation_mode_armed", username, session_id, asdict(self._state))
+            except Exception:
+                self._state = AuthorityState()
+                raise
             return asdict(self._state)
 
     def authorize_recipe(self, username: str, session_id: str, host: str,
@@ -176,7 +182,7 @@ class AuthorityService:
                 raise AuthorityDenied("Authority mode is not active")
             if host not in self._state.hosts or capability not in self._state.capabilities:
                 raise AuthorityDenied("Host or capability is outside the armed authority scope")
-            if self._state.mode == "autonomous_lab" and (
+            if self._state.mode in {"autonomous_lab", "dynamic_sandbox"} and (
                 self._hosts.get(host) is None
                 or self._hosts[host].environment not in AUTONOMOUS_ENVIRONMENTS
             ):
@@ -196,7 +202,7 @@ class AuthorityService:
                 raise AuthorityDenied("Plan includes a capability outside the armed scope")
             if action_count < 1 or self._state.actions_used + action_count > self._state.action_budget:
                 raise AuthorityDenied("Plan exceeds the remaining authority action budget")
-            if self._state.mode == "autonomous_lab" and any(
+            if self._state.mode in {"autonomous_lab", "dynamic_sandbox"} and any(
                 self._hosts[name].environment not in AUTONOMOUS_ENVIRONMENTS for name in hosts
             ):
                 raise AuthorityDenied("Plan host is not eligible for Autonomous Lab")
@@ -216,19 +222,27 @@ class AuthorityService:
     def _validate_arm(self, mode: str, hosts: Sequence[str], capabilities: Sequence[str],
                       duration: int, budget: int, concurrency: int,
                       recipe_ids: Sequence[str]) -> None:
-        if mode not in {"guided", "autonomous_lab"}:
-            raise AuthorityDenied("Only Guided or Autonomous Lab can be armed")
+        if mode not in {"guided", "autonomous_lab", "dynamic_sandbox"}:
+            raise AuthorityDenied("Unsupported authority mode")
         if not 1 <= len(hosts) <= 30 or len(set(hosts)) != len(hosts):
             raise AuthorityDenied("Select between 1 and 30 unique hosts")
         unknown = set(hosts) - self._hosts.keys()
         if unknown:
             raise AuthorityDenied("Unknown or unapproved host in authority scope")
-        if mode == "autonomous_lab" and any(
+        if mode in {"autonomous_lab", "dynamic_sandbox"} and any(
             self._hosts[name].environment not in AUTONOMOUS_ENVIRONMENTS for name in hosts
         ):
             raise AuthorityDenied("Autonomous Lab only permits development or disposable-lab hosts")
         if not capabilities or not set(capabilities) <= CAPABILITIES:
             raise AuthorityDenied("One or more capabilities are unavailable")
+        if "host_scripts" in capabilities and any(
+            self._hosts[name].environment not in AUTONOMOUS_ENVIRONMENTS for name in hosts
+        ):
+            raise AuthorityDenied("Host scripts require development or disposable-lab hosts")
+        if mode == "dynamic_sandbox" and set(capabilities) != {"dynamic_scripts"}:
+            raise AuthorityDenied("Dynamic sandbox only permits isolated dynamic scripts")
+        if mode != "dynamic_sandbox" and "dynamic_scripts" in capabilities:
+            raise AuthorityDenied("Dynamic scripts require Dynamic sandbox mode")
         if len(set(recipe_ids)) != len(recipe_ids) or not set(recipe_ids) <= AUTONOMOUS_RECIPES:
             raise AuthorityDenied("One or more autonomous recipes are unavailable")
         if recipe_ids and mode != "autonomous_lab":

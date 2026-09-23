@@ -88,6 +88,13 @@ sysadmin-mcp --config config/hosts.toml --audit-db data/audit.db
 
 ## Local operator UI
 
+The **Dynamic scripts** workspace adds optional, reviewed Python execution in
+rootless containers on enrolled lab VMs. Arm **Dynamic sandbox**, generate or
+write a script and verifier, prepare their digest, then run once with password
+reauthentication. It has no VM filesystem/network access and cannot perform host
+installations. Provision the separate helper before use; see
+[`docs/DYNAMIC_SANDBOX.md`](docs/DYNAMIC_SANDBOX.md) for limits and setup.
+
 Copy `.env.example` to `.env`, then add `OPENAI_API_KEY`, `GEMINI_API_KEY`,
 and the SSH credential environment variable referenced by the selected host.
 The real `.env` is Git-ignored and keys are never sent to the browser.
@@ -135,3 +142,15 @@ See [`hardening/README.md`](hardening/README.md) for host-side installation.
 Copy `config/hosts.example.toml` to `config/hosts.toml` only after the test
 host is prepared. `config/hosts.toml`, private keys, and SQLite files are
 ignored by Git.
+
+## Guided and Autonomous Lab host scripts
+
+Console requests now use the active mode: Guided Lab prepares a script and verifier
+for one-use approval. Autonomous Lab also requires approval for each generated host job
+under explicit Host scripts authority. These run on the selected lab VM with its
+SSH account permissions. A separately provisioned host helper is required.
+See [setup, operation, and limitations](docs/HOST_SCRIPT_MODES.md).
+
+### Approval-based software installation
+
+Native fresh installs of Nginx and Tomcat on Rocky Linux 9 are available from Software management or the MCP `prepare_software_install` tool. Each job requires administrator review and password confirmation before executing, including in Autonomous Lab mode. See [installation workflow](docs/APPROVED_SOFTWARE_INSTALL.md) for prerequisites, supported versions, verification and limitations.

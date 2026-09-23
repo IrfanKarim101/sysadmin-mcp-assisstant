@@ -8,8 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sysadmin_mcp.audit import SQLiteAuditLog
-from sysadmin_mcp.authority import AuthorityService
 from sysadmin_mcp.auth import MAX_LOGIN_FAILURES, AuthStore
+from sysadmin_mcp.authority import AuthorityService
 from sysadmin_mcp.backups import BackupService
 from sysadmin_mcp.config import ConfigError, HostConfig, validate_host
 from sysadmin_mcp.models import CommandResult
@@ -118,6 +118,40 @@ def test_rocky_software_api_plans_both_modes_without_execution(tmp_path):
     assert client.post("/api/software/plan", headers=csrf, json=body).status_code == 404
 
 
+def test_dynamic_api_requires_mode_password_digest_and_one_use(tmp_path):
+    audit = SQLiteAuditLog(tmp_path / "audit.db")
+    target = HostConfig(**{**host().__dict__, "environment": "development"})
+    calls = []
+    async def runner(host_name, scripts):
+        calls.append((host_name, scripts.script))
+        output = {"exit_status": 0, "stdout": "ok", "stderr": "", "truncated": False}
+        return {"execution": output, "verification": {**output, "stdout": '{"checks":[{"name":"file","passed":true}]}'}}
+    service = AgentService({target.name: target}, FakeExecutor(), model="test",
+                           client=SimpleNamespace(responses=FakeResponses()))
+    client = TestClient(create_app(service, audit, dynamic_runner=runner))
+    body = {"host": target.name, "title": "test", "script": "print(1)", "verification": "print(2)"}
+    assert client.post("/api/dynamic/jobs", json=body).status_code == 401
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "admin"}).json()
+    csrf = {"x-csrf-token": login["csrf_token"]}
+    password = "dynamic-test-password"
+    client.post("/api/auth/change-password", headers=csrf,
+                json={"current_password": "admin", "new_password": password})
+    assert client.post("/api/dynamic/jobs", headers=csrf, json=body).status_code == 400
+    armed = client.post("/api/authority/arm", headers=csrf, json={
+        "mode": "dynamic_sandbox", "hosts": [target.name], "capabilities": ["dynamic_scripts"],
+        "duration_minutes": 15, "action_budget": 1, "concurrency": 1, "password": password})
+    assert armed.status_code == 200
+    assert client.post("/api/dynamic/jobs", json=body).status_code == 403
+    job = client.post("/api/dynamic/jobs", headers=csrf, json=body).json()
+    path = f"/api/dynamic/jobs/{job['id']}/run"
+    assert client.post(path, headers=csrf, json={"digest": job["digest"], "password": "wrong"}).status_code == 401
+    assert calls == []
+    response = client.post(path, headers=csrf, json={"digest": job["digest"], "password": password})
+    assert response.status_code == 200 and response.json()["state"] == "verified"
+    assert client.post(path, headers=csrf, json={"digest": job["digest"], "password": password}).status_code == 400
+    assert len(calls) == 1
+
+
 def test_password_environment_name_is_validated():
     invalid = HostConfig(**{**host().__dict__, "password_env": "PASSWORD;whoami"})
     with pytest.raises(ConfigError, match="password_env"):
@@ -160,7 +194,11 @@ def test_api_does_not_expose_credentials(tmp_path: Path):
         , "/api/changes/{transaction_id}/skip-host"
         , "/api/changes/{transaction_id}/start", "/api/changes/{transaction_id}/advance"
         , "/api/recipes", "/api/recipes/plan"
-        , "/api/software", "/api/software/plan"
+        , "/api/software", "/api/software/plan", "/api/software/jobs", "/api/mcp/software/jobs"
+        , "/api/dynamic/jobs", "/api/dynamic/jobs/{job_id}",
+        "/api/dynamic/jobs/{job_id}/run", "/api/dynamic/generate", "/api/scripts/generate", "/api/scripts/jobs",
+        "/api/scripts/jobs/{job_id}", "/api/scripts/jobs/{job_id}/run", "/api/scripts/mcp-connection",
+        "/api/mcp/scope", "/api/mcp/jobs", "/api/mcp/jobs/{job_id}", "/api/mcp/jobs/{job_id}/run"
     }
 
 

@@ -1,0 +1,6 @@
+{
+  "enabled": false,
+  "environment": "disposable_lab",
+  "uid": 1001,
+  "image": "REPLACE_WITH_REVIEWED_PYTHON_IMAGE_AT_SHA256_DIGEST"
+}

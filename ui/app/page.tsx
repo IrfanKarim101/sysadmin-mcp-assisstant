@@ -6,6 +6,7 @@ import {
   Activity,
   Bot,
   CheckCircle2,
+  CircleX,
   Database,
   LoaderCircle,
   LockKeyhole,
@@ -305,11 +306,11 @@ export default function Home() {
           <ScrollArea className="h-[calc(100vh-20rem)] min-h-[470px]">
             <div className="mx-auto max-w-4xl space-y-7 px-6 py-8">
               <Bubble>
-                Ready to inspect{' '}
+                Selected VM:{' '}
                 <b className="text-emerald-300">
                   {host || 'a configured host'}
                 </b>
-                . Ask about ports, services, resources, logs, or users.
+                . Observe runs diagnostics. Guided Lab prepares scripts for review; Autonomous Lab executes requests when Host scripts is armed.
               </Bubble>
               {turns.map((t, i) =>
                 t.role === 'user' ? (
@@ -496,15 +497,17 @@ function Events({ events }: { events: Evt[] }) {
           </div>
         ) : e.type === 'thinking' ? (
           <p key={i} className="flex gap-2 text-muted-foreground">
-            {failed || completed ? (
+            {failed ? (
+              <CircleX className="size-4 text-red-300" />
+            ) : completed ? (
               <CheckCircle2 className="size-4 text-emerald-300" />
             ) : (
               <LoaderCircle className="size-4 animate-spin" />
             )}
             {failed
-              ? 'Diagnostic failed.'
+              ? 'Request failed.'
               : completed
-                ? 'Diagnostic completed.'
+                ? 'Request completed.'
                 : e.message}
           </p>
         ) : e.type === 'summary' ? (

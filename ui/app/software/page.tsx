@@ -52,13 +52,25 @@ export default function SoftwarePage() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not prepare workflow.'); }
     finally { setBusy(false); }
   }
+  async function prepareInstall() {
+    setBusy(true); setError('');
+    try {
+      const response = await apiFetch('/api/software/jobs', { method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ host, product, target_version: version }) });
+      const result = await response.json() as { review_path: string; detail?: unknown };
+      if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Check the version and arm Host scripts for this VM.');
+      window.location.assign(result.review_path);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not prepare installation.'); }
+    finally { setBusy(false); }
+  }
   return <main className="min-h-screen text-foreground">
     <header className="flex min-h-20 items-center justify-between border-b px-6 pl-16 md:pl-6">
       <div><h1 className="flex items-center gap-2 font-semibold"><Package className="size-5 text-emerald-300" />Software management</h1><p className="mt-1 text-xs text-muted-foreground">Rocky Linux 9 · Native services and Podman</p></div><AppNav />
     </header>
     <div className="mx-auto max-w-5xl space-y-6 p-6">
       <div className="glass-panel rounded-2xl border p-5"><h2 className="flex items-center gap-2 font-medium"><ShieldCheck className="size-4 text-emerald-300" />Data stays with the application</h2><p className="mt-2 text-sm text-muted-foreground">Upgrades require a consistent backup, compatibility checks, and verification of existing data. Cross-release migrations and native-to-container conversions are separate operations.</p></div>
-      <p className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-4 text-sm text-amber-200">Planning available. Live execution is not enabled: a Rocky 9 VM, host adapters, and installation/restore acceptance tests are still required.</p>
+      <p className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-4 text-sm text-amber-200">Nginx and Tomcat fresh native installations are available with your approval. Arm Host scripts for the VM, prepare an installation, and review it before running. The VM needs the updated host helper and noninteractive sudo permissions. Upgrades, containers, and other products remain planning-only.</p>
       {error && <p role="alert" className="text-sm text-red-200">{error}</p>}
       <form onSubmit={(event) => void preview(event)} className="glass-panel grid gap-5 rounded-2xl border p-5 sm:grid-cols-2">
         <Label className="grid gap-2">VM<NativeSelect value={host} disabled={busy} onChange={(event) => { setHost(event.target.value); setPlan(null); }}>
@@ -68,7 +80,9 @@ export default function SoftwarePage() {
         <Label className="grid gap-2">Deployment<NativeSelect value={deployment} disabled={busy} onChange={(event) => { setDeployment(event.target.value); setPlan(null); }}><NativeSelectOption value="native">Native systemd service</NativeSelectOption><NativeSelectOption value="podman">Podman container</NativeSelectOption></NativeSelect></Label>
         <Label className="grid gap-2">Operation<NativeSelect value={operation} disabled={busy} onChange={(event) => { setOperation(event.target.value); setPlan(null); }}><NativeSelectOption value="install">Fresh install</NativeSelectOption><NativeSelectOption value="upgrade">Upgrade and preserve data</NativeSelectOption></NativeSelect></Label>
         <Label className="grid gap-2">Exact target version<Input value={version} disabled={busy} placeholder="major.minor.patch" pattern="[0-9]+\.[0-9]+\.[0-9]+" required onChange={(event) => { setVersion(event.target.value); setPlan(null); }} /></Label>
-        <div className="flex items-end"><Button disabled={busy || !host || !version || !profiles.length} type="submit">{busy && <LoaderCircle className="animate-spin" />}Preview workflow</Button></div>
+        <div className="flex flex-wrap items-end gap-2"><Button disabled={busy || !host || !version || !profiles.length} type="submit">{busy && <LoaderCircle className="animate-spin" />}Preview workflow</Button>
+          {operation === 'install' && deployment === 'native' && ['nginx', 'tomcat'].includes(product) && <Button type="button" disabled={busy || !host || !version} onClick={() => void prepareInstall()}>Prepare installation for approval</Button>}</div>
+        {operation === 'install' && deployment === 'native' && ['nginx', 'tomcat'].includes(product) && <p className="text-sm text-muted-foreground sm:col-span-2">Installs the exact upstream version available from baseos/appstream, including dependency changes, and enables the service with packaged settings. Existing installations are refused. No firewall changes or application deployment. Failed jobs may leave partial changes; inspect the evidence before retrying.</p>}
         <p className="text-sm text-muted-foreground sm:col-span-2">{profiles.find((row) => row.id === product)?.upgrade_notes}</p>
       </form>
       {plan && <section className="glass-panel rounded-2xl border p-5"><h2 className="font-medium">{plan.product} {plan.operation} · {plan.host} · {plan.target_version}</h2><p className="mt-2 text-xs text-amber-200">Proposed steps only; no host inspection or installation has run.</p><ol className="mt-4 list-decimal space-y-2 pl-5 text-sm text-muted-foreground">{plan.steps.map((step) => <li key={step}>{step.replaceAll('_', ' ')}</li>)}</ol></section>}

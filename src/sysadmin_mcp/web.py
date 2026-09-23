@@ -18,33 +18,48 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from openai import AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import SQLiteAuditLog
-from .authority import AuthorityDenied, AuthorityService, AUTONOMOUS_RECIPES, CAPABILITIES
 from .auth import ABSOLUTE_TIMEOUT, SESSION_COOKIE, AuthStore, LoginThrottled
+from .authority import AUTONOMOUS_RECIPES, CAPABILITIES, AuthorityDenied, AuthorityService
 from .backups import BackupDenied, BackupService
-from .chat_store import MAX_CONTENT_CHARS, SQLiteChatStore
 from .changes import ChangeAction, ChangeDenied, ChangeTransactionService
+from .chat_store import MAX_CONTENT_CHARS, SQLiteChatStore
 from .config import HostConfig, load_hosts
 from .credential_vault import CredentialVault
+from .dynamic_execution import (
+    DraftRequest,
+    DynamicDenied,
+    DynamicJobs,
+    GenerateRequest,
+    HostDraftRequest,
+    RunRequest,
+)
+from .dynamic_transport import DynamicSSHRunner
 from .executor import ReadOnlyExecutor
 from .fleet import FleetHealthService
 from .fleet_store import FleetSnapshotStore
-from .models import CommandResult
+from .host_scripts import HOST_INSTRUCTIONS, HostJobs, HostSSHRunner, check_target
 from .managed_files import ManagedFileDenied, ManagedFilePlanner
-from .packages import PackageDenied, PackagePlanner
-from .services import ServiceDenied, ServicePlanner
+from .mcp_execution import register_execution_api
+from .models import CommandResult
 from .onboarding import HostOnboardingService, VMOnboardingRequest
+from .packages import PackageDenied, PackagePlanner
 from .playbooks import PlaybookRunner
 from .presentation import DiagnosticPresenter
-from .rate_limit import SlidingWindowRateLimiter
-from .remediation import RemediationDenied, RemediationService
-from .recovery import RecoveryDenied
+from .rate_limit import RateLimitExceeded, SlidingWindowRateLimiter
 from .recipes import AutonomousRecipePlanner, RecipeDenied
-from .rocky_software import SoftwareDenied, catalog as software_catalog, plan as software_plan
+from .recovery import RecoveryDenied
+from .remediation import RemediationDenied, RemediationService
+from .rocky_software import SoftwareDenied
+from .rocky_software import catalog as software_catalog
+from .rocky_software import plan as software_plan
+from .script_generation import SCRIPT_RESPONSE_FORMAT, GenerationOutputError, parse_script_response
 from .security_posture import SecurityPostureService
+from .services import ServiceDenied, ServicePlanner
+from .software_install import InstallRequest, prepare_install
 from .transport import AsyncSSHTransport
 
 INSTRUCTIONS = """You are Evesdropctl, a read-only Linux diagnostics assistant.
@@ -139,10 +154,10 @@ class BackupExecuteRequest(BaseModel):
 
 class AuthorityArmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    mode: Literal["guided", "autonomous_lab"]
+    mode: Literal["guided", "autonomous_lab", "dynamic_sandbox"]
     hosts: list[str] = Field(min_length=1, max_length=30)
-    capabilities: list[Literal["backups", "managed_files", "packages", "services"]] = Field(
-        min_length=1, max_length=4
+    capabilities: list[Literal["backups", "managed_files", "packages", "services", "dynamic_scripts", "host_scripts"]] = Field(
+        min_length=1, max_length=6
     )
     duration_minutes: int = Field(ge=15, le=60)
     action_budget: int = Field(ge=1, le=50)
@@ -236,7 +251,7 @@ class AgentService:
         self.presenter = DiagnosticPresenter()
         self.limiter = SlidingWindowRateLimiter(30, 60)
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[str]:
+    async def stream(self, request: ChatRequest, events=None) -> AsyncIterator[str]:
         if request.host not in self.hosts:
             yield _event("error", message="Unknown or unapproved host.")
             return
@@ -254,7 +269,7 @@ class AgentService:
                 {"host": request.host, "provider": request.provider},
             )
             yield _event("session", session_id=session_id)
-        async for line in self._stream_events(request):
+        async for line in (events if events is not None else self._stream_events(request)):
             if self.chat_store is not None:
                 event = json.loads(line)
                 if event["type"] in {"summary", "error"} and event.get("message"):
@@ -428,9 +443,14 @@ def create_app(
     backups: BackupService | None = None,
     authority: AuthorityService | None = None,
     changes: ChangeTransactionService | None = None,
+    dynamic_runner=None,
+    host_runner=None,
 ) -> FastAPI:
     auth = auth or AuthStore(audit.path)
     authority = authority or AuthorityService(service.hosts, audit)
+    dynamic = DynamicJobs(audit.path, authority, audit, dynamic_runner)
+    host_jobs = HostJobs(audit.path.with_name(audit.path.stem + "-host-jobs.db"),
+                         authority, audit, host_runner, lambda: service.hosts)
     changes = changes or ChangeTransactionService(
         audit.path, authority, audit, managed_files=ManagedFilePlanner(service.hosts),
         packages=PackagePlanner(service.hosts),
@@ -467,6 +487,7 @@ def create_app(
             request.method == "OPTIONS"
             or not request.url.path.startswith("/api/")
             or request.url.path == "/api/auth/login"
+            or request.url.path.startswith("/api/mcp/")
         ):
             return await call_next(request)
         session = auth.authenticate(request.cookies.get(SESSION_COOKIE))
@@ -616,6 +637,154 @@ def create_app(
             raise HTTPException(403, "Administrator access required")
         return session
 
+    register_execution_api(app, auth, authority, host_jobs, audit, change_operator)
+
+    @app.post("/api/dynamic/jobs")
+    async def dynamic_prepare(body: DraftRequest, request: Request):
+        session = change_operator(request)
+        try:
+            return dynamic.create(session.username, session.session_id, body)
+        except (DynamicDenied, AuthorityDenied) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.get("/api/dynamic/jobs/{job_id}")
+    async def dynamic_status(job_id: UUID, request: Request):
+        session = change_operator(request)
+        try:
+            return dynamic.get(session.username, session.session_id, str(job_id))
+        except DynamicDenied as error:
+            raise HTTPException(404, str(error)) from error
+
+    @app.post("/api/dynamic/jobs/{job_id}/run")
+    async def dynamic_run(job_id: UUID, body: RunRequest, request: Request):
+        session = change_operator(request)
+        if not auth.verify_password(session.username, body.password):
+            raise HTTPException(401, "Password reauthentication failed")
+        try:
+            return await dynamic.run(session.username, session.session_id, str(job_id), body.digest)
+        except (DynamicDenied, AuthorityDenied) as error:
+            raise HTTPException(400, str(error)) from error
+
+    async def generate_scripts(body: GenerateRequest, session, jobs, host_execution=False):
+        finish_reason = None
+        try:
+            lease = jobs.authorized(session.username, session.session_id, body.host)
+            await service.limiter.acquire("dynamic-generation:" + session.session_id)
+            instructions = (
+                'Return JSON only with fields script and verification, both Python 3 source strings. '
+                'The scripts run in a rootless, offline container with a read-only root filesystem. '
+                'Only /work is writable and shared between separate script and verifier processes. '
+                'There is no host access, network, credentials, package installation, or host administration. '
+                'Use the Python standard library only. Do not claim to inspect or change the real VM. '
+                'Verification must independently inspect task outputs in /work and print one JSON object '
+                'of the form {"checks":[{"name":"meaningful assertion","passed":true}]}. '
+                'Do not just report script exit status or unconditionally pass. '
+                'For tasks requiring host access, produce scripts which raise an explanatory error. '
+                'Do not execute anything or invoke tools; produce a draft for operator review.'
+            )
+            if host_execution:
+                instructions = HOST_INSTRUCTIONS + "\nSelected VM: " + body.host
+            if body.provider == "openai":
+                client = service.client or AsyncOpenAI(api_key=_required_key("OPENAI_API_KEY"))
+                response = await service._model_call(client.responses.create(
+                    model=service.model, instructions=instructions, input=body.task,
+                    max_output_tokens=6000), timeout_seconds=90)
+                content = response.output_text
+                if getattr(response, "status", None) == "incomplete":
+                    finish_reason = "length"
+            else:
+                local = body.provider == "local"
+                client = AsyncOpenAI(
+                    api_key=(os.getenv("LOCAL_LLM_API_KEY") or "local-not-required") if local else _required_key("GEMINI_API_KEY"),
+                    base_url=os.getenv("LOCAL_LLM_BASE_URL", "http://127.0.0.1:11434/v1") if local else "https://generativelanguage.googleapis.com/v1beta/openai/",
+                    max_retries=1, timeout=90,
+                )
+                async with client:
+                    response = await service._model_call(client.chat.completions.create(
+                        model=os.getenv("LOCAL_LLM_MODEL", "llama3.2") if local else os.getenv("GEMINI_MODEL", "gemini-3.5-flash"),
+                        messages=[{"role": "system", "content": instructions}, {"role": "user", "content": body.task}],
+                        max_tokens=6000,
+                        **({"response_format": SCRIPT_RESPONSE_FORMAT} if not local else {}),
+                    ), timeout_seconds=90)
+                    content = response.choices[0].message.content or ""
+                    finish_reason = response.choices[0].finish_reason
+            current = jobs.authorized(session.username, session.session_id, body.host)
+            if current["generation_id"] != lease["generation_id"]:
+                raise AuthorityDenied("Authority changed while generating; request a new draft")
+            return parse_script_response(content, finish_reason).model_dump()
+        except (AuthorityDenied, RateLimitExceeded) as error:
+            raise HTTPException(400, str(error)) from error
+        except GenerationOutputError as error:
+            raise HTTPException(502, str(error)) from error
+        except (TimeoutError, APITimeoutError) as error:
+            raise HTTPException(504, f"{body.provider} script generation timed out after 90 seconds. Nothing was executed.") from error
+        except APIConnectionError as error:
+            raise HTTPException(502, f"Cannot connect to {body.provider}. Check the backend's network connection. Nothing was executed.") from error
+        except APIStatusError as error:
+            detail = {401: "Check the configured API key", 403: "Check API key permissions", 404: "Check the configured model name", 429: "Provider quota or rate limit reached", 503: "Provider temporarily unavailable; try again shortly"}.get(error.status_code, "Provider rejected script generation")
+            raise HTTPException(502, f"{body.provider}: {detail} (HTTP {error.status_code}). Nothing was executed.") from error
+        except Exception as error:
+            raise HTTPException(502, "Could not generate valid Python scripts; edit scripts manually or retry.") from error
+
+    @app.post("/api/dynamic/generate")
+    async def dynamic_generate(body: GenerateRequest, request: Request):
+        return await generate_scripts(body, change_operator(request), dynamic)
+
+    @app.post("/api/scripts/generate")
+    async def host_generate(body: GenerateRequest, request: Request):
+        try:
+            check_target(body.task, body.host, service.hosts)
+        except AuthorityDenied as error:
+            raise HTTPException(400, str(error)) from error
+        return await generate_scripts(body, change_operator(request), host_jobs, True)
+
+    @app.post("/api/scripts/jobs")
+    async def host_prepare(body: HostDraftRequest, request: Request):
+        session = change_operator(request)
+        try:
+            return host_jobs.create(session.username, session.session_id, body)
+        except (DynamicDenied, AuthorityDenied) as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.get("/api/scripts/jobs/{job_id}")
+    async def host_status(job_id: UUID, request: Request):
+        session = change_operator(request)
+        try:
+            return host_jobs.get(session.username, session.session_id, str(job_id))
+        except DynamicDenied as error:
+            raise HTTPException(404, str(error)) from error
+
+    @app.post("/api/scripts/jobs/{job_id}/run")
+    async def host_run(job_id: UUID, body: RunRequest, request: Request):
+        session = change_operator(request)
+        if not auth.verify_password(session.username, body.password):
+            raise HTTPException(401, "Password reauthentication failed")
+        try:
+            return await host_jobs.run(session.username, session.session_id, str(job_id), body.digest,
+                                       user_approved=True)
+        except (DynamicDenied, AuthorityDenied) as error:
+            raise HTTPException(400, str(error)) from error
+
+    async def host_chat(body, session):
+        try:
+            state = host_jobs.authorized(session.username, session.session_id, body.host)
+            check_target(body.message, body.host, service.hosts)
+            yield _event("thinking", message=f"Preparing host scripts for {body.host} in {state['mode']} mode…")
+            scripts = await generate_scripts(GenerateRequest(host=body.host, task=body.message,
+                                                            provider=body.provider), session, host_jobs, True)
+            if authority.current()["generation_id"] != state["generation_id"]:
+                raise AuthorityDenied("Authority changed while preparing; submit a new request")
+            job = host_jobs.create(session.username, session.session_id,
+                                  DraftRequest(host=body.host, title=body.message[:120], **scripts))
+            link = f"[Review scripts and evidence](/scripts?job={job['id']})"
+            yield _event("summary", message=f"Prepared a host script for **{body.host}**. Nothing has executed. "
+                         f"Review the script and verifier, then approve this one-use job. {link}")
+        except (AuthorityDenied, DynamicDenied, HTTPException, ValueError) as error:
+            yield _event("error", message=str(error.detail) if isinstance(error, HTTPException) else str(error))
+        except Exception:  # noqa: BLE001 - sanitize errors at the streaming API boundary
+            yield _event("error", message="Host script request failed. Inspect job evidence before retrying.")
+        yield _event("done")
+
     @app.get("/api/changes")
     async def change_list(request: Request, limit: int = 50) -> list[dict[str, object]]:
         session = change_operator(request)
@@ -633,6 +802,14 @@ def create_app(
     async def software_profiles(request: Request) -> list[dict[str, object]]:
         change_operator(request)
         return software_catalog()
+
+    @app.post("/api/software/jobs")
+    async def software_prepare_install(body: InstallRequest, request: Request):
+        session = change_operator(request)
+        try:
+            return prepare_install(host_jobs, session, body)
+        except (DynamicDenied, AuthorityDenied) as error:
+            raise HTTPException(400, str(error)) from error
 
     @app.post("/api/software/plan")
     async def software_preview(body: SoftwarePlanRequest, request: Request) -> dict[str, object]:
@@ -1063,8 +1240,19 @@ def create_app(
         return {"deleted": deleted}
 
     @app.post("/api/chat")
-    async def chat(request: ChatRequest) -> StreamingResponse:
-        return StreamingResponse(service.stream(request), media_type="application/x-ndjson", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+    async def chat(request: ChatRequest, http_request: Request) -> StreamingResponse:
+        state = authority.current()
+        events = None
+        if state["mode"] in {"guided", "autonomous_lab"}:
+            session = change_operator(http_request)
+            events = host_chat(request, session)
+        elif state["mode"] == "dynamic_sandbox":
+            async def sandbox_notice():
+                yield _event("summary", message="Dynamic sandbox runs from [Dynamic scripts](/dynamic). "
+                             "It cannot modify host services. Select Guided or Autonomous Lab with Host scripts for host tasks.")
+                yield _event("done")
+            events = sandbox_notice()
+        return StreamingResponse(service.stream(request, events), media_type="application/x-ndjson", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
     # Add CORS last so it wraps authentication responses as well as route responses.
     # Otherwise browsers hide 401/403 responses as a generic network failure.
@@ -1177,13 +1365,16 @@ def build_app(config_path: Path, audit_path: Path, model: str | None = None) -> 
     vault = CredentialVault(audit_path, Path("data/credentials.key"))
     transport = AsyncSSHTransport(password_provider=lambda host: vault.get(host.name))
     executor = ReadOnlyExecutor(hosts, transport, audit, session_id=str(uuid4()))
+    agent = AgentService(hosts, executor, model=model, chat_store=SQLiteChatStore(audit_path))
     return create_app(
-        AgentService(hosts, executor, model=model, chat_store=SQLiteChatStore(audit_path)),
+        agent,
         audit,
         HostOnboardingService(config_path, Path("data/known_hosts"), vault),
         AuthStore(audit_path),
         RemediationService(hosts, transport, audit),
         BackupService(hosts, transport, audit),
+        dynamic_runner=DynamicSSHRunner(lambda: agent.hosts, lambda host: vault.get(host.name)),
+        host_runner=HostSSHRunner(lambda: agent.hosts, lambda host: vault.get(host.name)),
     )
 
 
